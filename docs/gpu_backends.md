@@ -2,7 +2,7 @@
 
 *What a device backend is in Vx, which ones exist, and how a new one gets in.*
 
-This is for contributors who want to bring Vx to a new device, and for users
+This is for contributors who want to support a new device, and for users
 who want to know what runs where. Related:
 [`adding_a_topology.md`](adding_a_topology.md) (declaring the hardware),
 [`spawn_on.md`](spawn_on.md) (the execution model),
@@ -70,7 +70,7 @@ without the hardware can check. The tiers, modeled on Rust's target tiers:
 
 - **Tier 1 — CPU paths.** CI runs the tests; a regression blocks the merge.
 - **Tier 2 — NVIDIA.** Maintainer-owned. CI proves it builds; correctness is
-  shown by parity runs on rented hardware before any release or public claim.
+  shown by parity runs on hardware before any release or public claim.
 - **Tier 3 — community backends.** Must build in CI with no vendor SDK
   installed: the device-image half compiles and its output is checked with
   FileCheck, and the vendor-free runtime pieces have unit tests in
