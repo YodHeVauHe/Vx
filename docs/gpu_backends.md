@@ -63,6 +63,25 @@ SYCL as a compile target is declined: Vx's checker already does the job
 SYCL's C++ layer does. What the SYCL stack offers Vx is its runtime (Level
 Zero) and its libraries (oneMKL), and those are used directly.
 
+**Vulkan or Level Zero?** Both take SPIR-V, but different dialects of it, and
+the difference is bigger than it sounds:
+
+- **Level Zero** takes kernel-flavor SPIR-V (the OpenCL flavor). Pointers are
+  real 64-bit addresses, so kernel arguments and the memref marshalling in
+  `runtime/vx_kernel_launch.h` carry over as they are, and oneMKL answers the
+  matmul rule.
+- **Vulkan** takes shader-flavor SPIR-V. It has no raw pointers unless the
+  device supports `VK_KHR_buffer_device_address`, so a Vulkan backend here
+  should require that extension outright — the alternative is descriptor
+  sets, which means a rework of the whole argument convention. Vulkan also
+  has no vendor BLAS, so the matmul rule has no answer there yet. What Vulkan
+  buys is reach (cards from every vendor) and one thing Level Zero cannot
+  offer: Mesa's lavapipe is a software Vulkan device that installs on a plain
+  CI runner, so Vulkan kernels could actually *execute* in CI.
+
+For a first community backend, Level Zero is the smaller step. A Vulkan
+runtime can come later under the same device-image machinery.
+
 ## Support tiers
 
 CI runs on Ubuntu with no GPU, so "merged" has to mean something a machine
@@ -78,6 +97,9 @@ without the hardware can check. The tiers, modeled on Rust's target tiers:
   records in each PR, with the test marked `REQUIRES: gpu`. A named owner is
   a requirement for merging; a backend that loses its owner is marked
   unmaintained here, not reverted. A Tier 3 regression never blocks `main`.
+  To compile without the SDK, vendor the open headers (Khronos publishes
+  both the Vulkan and the Level Zero headers) or load the driver with
+  `dlopen`, so the file builds everywhere and only running needs the device.
 
 ## Shared work before a second backend
 
@@ -85,30 +107,39 @@ These are the places where the compiler currently assumes NVIDIA is the only
 device target. Each gets its own issue; they are vendor-neutral, so they keep
 their value whichever backend lands first.
 
-1. **The kernel eligibility gate accepts one arch.** `materializeGpuKernels`
+1. **Kernels all land in one module, for one arch.** `materializeGpuKernels`
    in `src/dialect/VxLowering.cpp` only clones kernels whose `arch:` is
-   `nvptx64` into the `gpu.module`. It needs to become a choice keyed on the
-   declared `arch:`.
+   `nvptx64`, and clones them all into the single `gpu.module @vx_kernels`.
+   Kernels need to be grouped into one `gpu.module` per target arch, each
+   module carrying its target attribute (`#nvvm.target`,
+   `#spirv.target_env`), and `deviceImageOf()` becomes a choice keyed on that
+   attribute rather than a function that always runs the NVVM passes.
 1. **The dispatch payload cannot carry a binary image.** The payload is a
    sequence of NUL-terminated `key=value` entries, which works because PTX is
    text; `deviceImageOf()` rejects images containing a NUL byte. SPIR-V is
-   binary, so the image needs an encoding (or the payload format changes),
-   and the payload should carry a version key (`abi=1`) so a dispatch library
-   that sees a format it does not know refuses instead of guessing. The
-   `vx_plugin_*` interface is not frozen yet, and the version key is what
-   makes changing it safe.
+   binary, so the image needs either an encoding (base64) or a
+   length-prefixed section — that choice is the issue's to make. Alongside
+   the image, the payload should name what it carries: a version key
+   (`abi=1`), the image format (`format=ptx` or `format=spirv`), and the
+   kernel entry point, so a dispatch library that sees something it does not
+   know refuses instead of guessing. The `vx_plugin_*` interface is not
+   frozen yet, and the version key is what makes changing it safe.
 1. **Address spaces are mapped for NVVM only.** `AddressSpace` in
-   `src/arch.rs` knows the NVPTX numbering, and one place in
-   `VxLowering.cpp` hardcodes NVVM's shared-memory address space 3. Each
-   target needs its own mapping through the same table.
+   `src/arch.rs` knows the NVPTX numbering, and several places in
+   `VxLowering.cpp` compare the shared-memory address space to the integer 3
+   directly. The lowering should carry the symbolic
+   `#gpu.address_space<workgroup>` instead, and each target's type converter
+   maps it to its own number (3 for NVVM, the `Workgroup` storage class for
+   SPIR-V).
 1. **Scalar element types escape the `dtypes:` check.** E6026 covers tensors
    that are placed or transferred. An f64 *scalar* inside a `spawn` body
    passes the checker today and would only fail on the device. The body of a
    `spawn` has to be checked against the target topology's `dtypes:` list.
 1. **One dispatch library per build.** `build.rs` builds exactly one runtime
    dispatch library and programs load that one (`VX_DISPATCH_LIB` overrides
-   it by hand). Running two device kinds from one program needs dispatch
-   routed by topology.
+   it by hand). Running two device kinds from one program needs a routing
+   registry: each `vx_plugin_*` call carries or implies a topology id, and
+   the registry maps that id to the backend that owns the device.
 1. **A conformance test set.** A vendor-neutral set of placed-kernel programs
    whose results are compared against the CPU path.
    `tests/backend/pass/placed_kernel_four_operands.vx` is the reference
