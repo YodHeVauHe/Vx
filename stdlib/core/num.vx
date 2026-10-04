@@ -1244,29 +1244,8 @@ macro_rules stamp_float {
 
 
 
-      /// The angle in radians whose sine is this, between -pi/2 and pi/2.
-      fn asin(self : $t) -> $t {
-        return mlir!( inputs : (%a = self : $t), returns : $t, dialects : ["math"]) {
-          %r = math.asin %a : $t
-          macro.yield %r : $t
-        };
-      }
 
-      /// The angle in radians whose cosine is this, between 0 and pi.
-      fn acos(self : $t) -> $t {
-        return mlir!( inputs : (%a = self : $t), returns : $t, dialects : ["math"]) {
-          %r = math.acos %a : $t
-          macro.yield %r : $t
-        };
-      }
 
-      /// The angle in radians whose tangent is this. `atan2` is the form that keeps the quadrant.
-      fn atan(self : $t) -> $t {
-        return mlir!( inputs : (%a = self : $t), returns : $t, dialects : ["math"]) {
-          %r = math.atan %a : $t
-          macro.yield %r : $t
-        };
-      }
 
 
 
@@ -1316,13 +1295,6 @@ macro_rules stamp_float {
         };
       }
 
-      /// The angle to the point (`x`, this), which is `atan` with the quadrant kept.
-      fn atan2(self : $t, x : $t) -> $t {
-        return mlir!( inputs : (%a = self : $t, %b = x : $t), returns : $t, dialects : ["math"]) {
-          %r = math.atan2 %a, %b : $t
-          macro.yield %r : $t
-        };
-      }
 
       /// This value's magnitude with `sign`'s sign.
       fn copysign(self : $t, sign : $t) -> $t {
@@ -1672,6 +1644,45 @@ macro_rules stamp_float_exps {
 
 stamp_float_exps!(f64 , 1.0);
 
+/// Stamps `asin`, `acos`, `atan` and `atan2` through the platform's `math` operations, for `f64`, which has no `core::libm`
+/// version yet. The other widths use `core::libm`'s.
+macro_rules stamp_float_inverse_trig {
+  ($t : ident) => {
+    impl $t {
+      /// The angle in radians whose sine is this, between -pi/2 and pi/2.
+      fn asin(self : $t) -> $t {
+        return mlir!( inputs : (%a = self : $t), returns : $t, dialects : ["math"]) {
+          %r = math.asin %a : $t
+          macro.yield %r : $t
+        };
+      }
+      /// The angle in radians whose cosine is this, between 0 and pi.
+      fn acos(self : $t) -> $t {
+        return mlir!( inputs : (%a = self : $t), returns : $t, dialects : ["math"]) {
+          %r = math.acos %a : $t
+          macro.yield %r : $t
+        };
+      }
+      /// The angle in radians whose tangent is this. `atan2` is the form that keeps the quadrant.
+      fn atan(self : $t) -> $t {
+        return mlir!( inputs : (%a = self : $t), returns : $t, dialects : ["math"]) {
+          %r = math.atan %a : $t
+          macro.yield %r : $t
+        };
+      }
+      /// The angle to the point (`x`, this), which is `atan` with the quadrant kept.
+      fn atan2(self : $t, x : $t) -> $t {
+        return mlir!( inputs : (%a = self : $t, %b = x : $t), returns : $t, dialects : ["math"]) {
+          %r = math.atan2 %a, %b : $t
+          macro.yield %r : $t
+        };
+      }
+    }
+  };
+}
+
+stamp_float_inverse_trig!(f64);
+
 /// Stamps `sin`, `cos` and `tan` through the platform's `math` operations, for `f64`, which has no `core::libm`
 /// version yet. The other widths use `core::libm`'s.
 macro_rules stamp_float_trig {
@@ -1857,6 +1868,27 @@ impl f32 {
   fn tan(self : f32) -> f32 {
     return libm_tanf(self);
   }
+
+  /// The arcsine, between -pi/2 and pi/2, correctly rounded (LLVM libc's `asinf`).
+  fn asin(self : f32) -> f32 {
+    return libm_asinf(self);
+  }
+
+  /// The arccosine, between 0 and pi, correctly rounded (LLVM libc's `acosf`).
+  fn acos(self : f32) -> f32 {
+    return libm_acosf(self);
+  }
+
+  /// The arctangent, between -pi/2 and pi/2, correctly rounded (LLVM libc's `atanf`).
+  fn atan(self : f32) -> f32 {
+    return libm_atanf(self);
+  }
+
+  /// The angle to the point (`x`, this), which is `atan` with the quadrant kept; correctly
+  /// rounded (LLVM libc's `atan2f`).
+  fn atan2(self : f32, x : f32) -> f32 {
+    return libm_atan2f(self, x);
+  }
 }
 
 impl f16 {
@@ -1924,6 +1956,27 @@ impl f16 {
   fn tan(self : f16) -> f16 {
     return libm_tanf16(self);
   }
+
+  /// The arcsine, between -pi/2 and pi/2, correctly rounded (through LLVM libc's `asinf`).
+  fn asin(self : f16) -> f16 {
+    return libm_asinf16(self);
+  }
+
+  /// The arccosine, between 0 and pi, correctly rounded (through LLVM libc's `acosf`).
+  fn acos(self : f16) -> f16 {
+    return libm_acosf16(self);
+  }
+
+  /// The arctangent, between -pi/2 and pi/2, correctly rounded (through LLVM libc's `atanf`).
+  fn atan(self : f16) -> f16 {
+    return libm_atanf16(self);
+  }
+
+  /// The angle to the point (`x`, this), which is `atan` with the quadrant kept; correctly
+  /// rounded (through LLVM libc's `atan2f`).
+  fn atan2(self : f16, x : f16) -> f16 {
+    return libm_atan2f16(self, x);
+  }
 }
 
 impl bf16 {
@@ -1990,6 +2043,27 @@ impl bf16 {
   /// The tangent of this many radians, correctly rounded (through LLVM libc's `tanf`).
   fn tan(self : bf16) -> bf16 {
     return libm_tan_bf16(self);
+  }
+
+  /// The arcsine, between -pi/2 and pi/2, correctly rounded (through LLVM libc's `asinf`).
+  fn asin(self : bf16) -> bf16 {
+    return libm_asin_bf16(self);
+  }
+
+  /// The arccosine, between 0 and pi, correctly rounded (through LLVM libc's `acosf`).
+  fn acos(self : bf16) -> bf16 {
+    return libm_acos_bf16(self);
+  }
+
+  /// The arctangent, between -pi/2 and pi/2, correctly rounded (through LLVM libc's `atanf`).
+  fn atan(self : bf16) -> bf16 {
+    return libm_atan_bf16(self);
+  }
+
+  /// The angle to the point (`x`, this), which is `atan` with the quadrant kept; correctly
+  /// rounded (through LLVM libc's `atan2f`).
+  fn atan2(self : bf16, x : bf16) -> bf16 {
+    return libm_atan2_bf16(self, x);
   }
 }
 

@@ -2142,3 +2142,549 @@ fn libm_cos_bf16(x : bf16) -> bf16 {
 fn libm_tan_bf16(x : bf16) -> bf16 {
   return libm_bf16_from_f32(libm_tanf(libm_f32_from_bf16(x)));
 }
+
+/// `ASINF_COEFFS` from `asin_utils.h`: a degree-22 even polynomial for `asin(x)/x - 1`.
+const LIBM_ASINF_COEFFS : Tensor<f64, [12]> = [
+0.16666666666665364, 0.07500000000344668, 0.04464285682338118, 0.03038195930471132,
+0.022371754634781287, 0.0173597495227686, 0.013884844588415067, 0.012171511651884391,
+0.006518962101211009, 0.019550818764840792, -0.016256861503108583, 0.031932998817211934
+];
+
+/// `asin(x)/x - 1` in terms of `xsq = x^2`, for the single-precision functions: `asin_eval`
+/// from `asin_utils.h`.
+fn libm_asin_eval(xsq : f64) -> f64 {
+  let x4 = xsq * xsq;
+  let c0 = libm_multiply_add(xsq, LIBM_ASINF_COEFFS[1], LIBM_ASINF_COEFFS[0]);
+  let c1 = libm_multiply_add(xsq, LIBM_ASINF_COEFFS[3], LIBM_ASINF_COEFFS[2]);
+  let c2 = libm_multiply_add(xsq, LIBM_ASINF_COEFFS[5], LIBM_ASINF_COEFFS[4]);
+  let c3 = libm_multiply_add(xsq, LIBM_ASINF_COEFFS[7], LIBM_ASINF_COEFFS[6]);
+  let c4 = libm_multiply_add(xsq, LIBM_ASINF_COEFFS[9], LIBM_ASINF_COEFFS[8]);
+  let c5 = libm_multiply_add(xsq, LIBM_ASINF_COEFFS[11], LIBM_ASINF_COEFFS[10]);
+  let x8 = x4 * x4;
+  let d0 = libm_multiply_add(x4, c1, c0);
+  let d1 = libm_multiply_add(x4, c3, c2);
+  let d2 = libm_multiply_add(x4, c5, c4);
+  return libm_multiply_add(x8, libm_multiply_add(x8, d2, d1), d0);
+}
+
+/// The arcsine, correctly rounded: `asinf` from `asinf.h`. Below about 0.5 an odd
+/// polynomial; above, `asin(x) = pi/2 - 2 asin(sqrt((1 - x) / 2))`.
+fn libm_asinf(x : f32) -> f32 {
+  let x_uint = libm_f32_to_bits(x);
+  let x_abs = x_uint & 2147483647u32; // 0x7fffffff
+  // |x| < 0x1.088e3ap-1
+  if x_abs < 1057244957u32 { // 0x3f04471d
+    // |x| < 0x1.d12edp-12
+    if x_abs < 971544424u32 { // 0x39e89768
+      return libm_multiply_add_f32(x, libm_f32_from_bits(855638016u32), x); // 0x1.0p-25f
+    }
+    let xd = x as f64;
+    let xsq = xd * xd;
+    let x3 = xd * xsq;
+    return libm_multiply_add(x3, libm_asin_eval(xsq), xd) as f32;
+  }
+  // |x| > 1, infinity or NaN.
+  if x_abs > 1065353216u32 { // 0x3f800000
+    return libm_f32_from_bits(2143289344u32); // 0x7fc00000
+  }
+  // -2 for a positive x, 2 for a negative one.
+  let sign_two : f64 = if (x_uint >> 31u32) == 1u32 {
+    2.0
+  } else {
+    -2.0
+  };
+  let uf = libm_multiply_add_f32(-0.5, libm_f32_from_bits(x_abs), 0.5);
+  let u = uf as f64;
+  let c1 = sign_two * libm_sqrt_f64(u);
+  let c2 = libm_multiply_add(sign_two, libm_f64_from_bits(13828621494152080664u64), c1); // -0x1.921fb54442d18p-1
+  let c3 = c1 * u;
+  return libm_multiply_add(c3, libm_asin_eval(u), c2) as f32;
+}
+
+/// The arccosine, correctly rounded: `acosf` from `acosf.h`. Up to 0.5, `pi/2 - asin(x)`;
+/// above, `2 asin(sqrt((1 - |x|) / 2))`, from pi for a negative x.
+fn libm_acosf(x : f32) -> f32 {
+  let x_uint = libm_f32_to_bits(x);
+  let x_abs = x_uint & 2147483647u32; // 0x7fffffff
+  let x_neg = (x_uint >> 31u32) == 1u32;
+  // |x| <= 0.5
+  if x_abs <= 1056964608u32 { // 0x3f000000
+    // |x| < 2^-10
+    if x_abs < 981467136u32 { // 0x3a800000
+      // Inputs where the evaluation below would round the wrong way.
+      if x_uint == 847807907u32 { // 0x1.110b46p-26
+        return libm_f32_from_bits(1070141403u32); // 0x1.921fb6p+0
+      }
+      if x_uint == 2995291555u32 { // -0x1.110b46p-26
+        return libm_f32_from_bits(1070141403u32); // 0x1.921fb6p+0
+      }
+      if x_uint == 964846114u32 { // 0x1.04c444p-12
+        return libm_f32_from_bits(1070139317u32); // 0x1.920f6ap+0
+      }
+      if x_uint == 3112329762u32 { // -0x1.04c444p-12
+        return libm_f32_from_bits(1070143489u32); // 0x1.923002p+0
+      }
+      let xd = x as f64;
+      return libm_multiply_add(libm_f64_from_bits(13818544856648471893u64) * xd, xd * xd, libm_f64_from_bits(4609753056924675352u64) - xd) as f32; // -0x1.5555555555555p-3, 0x1.921fb54442d18p+0
+    }
+    let xd = x as f64;
+    let xsq = xd * xd;
+    let x3 = xd * xsq;
+    return libm_multiply_add(-x3, libm_asin_eval(xsq), libm_f64_from_bits(4609753056924675352u64) - xd) as f32; // 0x1.921fb54442d18p+0
+  }
+  // |x| >= 1, infinity or NaN.
+  if x_abs >= 1065353216u32 { // 0x3f800000
+    if x_abs == 1065353216u32 { // 0x3f800000
+      if x_neg {
+        return libm_f32_from_bits(1078530011u32); // 0x1.921fb6p+1f
+      }
+      return 0.0;
+    }
+    if libm_f32_is_signaling_nan(x_uint) {
+      return libm_f32_from_bits(2143289344u32); // 0x7fc00000
+    }
+    return x + libm_f32_from_bits(2143289344u32); // 0x7fc00000
+  }
+  let xd = libm_f32_from_bits(x_abs) as f64;
+  let u = libm_multiply_add(-0.5, xd, 0.5);
+  let cv = 2.0 * libm_sqrt_f64(u);
+  let r = libm_multiply_add(cv * u, libm_asin_eval(u), cv);
+  if x_neg {
+    return (libm_f64_from_bits(4614256656552045848u64) - r) as f32; // 0x1.921fb54442d18p+1
+  }
+  return r as f32;
+}
+
+/// `ATAN_COEFFS` from `atan_utils.h`, flattened: row `i` holds `atan(i/16)` and a degree-8
+/// polynomial for `atan(i/16 + x) - atan(i/16)`, at `[9 * i + j]`.
+const LIBM_ATAN_COEFFS : Tensor<f64, [153]> = [
+0.0, 1.0, 0.000000000000008869366195084276, -0.33333333334048865, 0.000000001963552545614748, 0.19999974385936856, 0.00001789720662328363, -0.14354516565889056, 0.01372417952639923,
+0.06241880999595734, 0.9961089494163397, -0.06201456494402331, -0.3255965744024295, 0.061292536383593, 0.18849224712259213, -0.06025927907046346, -0.12748113406685765, 0.058009756061519,
+0.12435499454676144, 0.9846153846153832, -0.12118343195267112, -0.30326930661093005, 0.11564771534174335, 0.15638839908597052, -0.10799176709240983, -0.08710349113750157, 0.09825499943113183,
+0.18534794999569476, 0.9660377358490569, -0.17498042007825676, -0.2688168801581556, 0.15755588328557993, 0.11015088672637323, -0.13472259344941245, -0.03419439719338726, 0.10811626401213925,
+0.24497866312686414, 0.9411764705882368, -0.2214532871970948, -0.2257955085362892, 0.18390584354504466, 0.05827299040503041, -0.13824332680874404, 0.016477662042408733, 0.09037635659128192,
+0.3028848683749714, 0.9110320284697531, -0.25936854903069645, -0.1782043459350474, 0.1942480283297007, 0.008926940501244813, -0.12221407250593548, 0.053690574237112404, 0.05708124716885467,
+0.35877067027057225, 0.8767123287671252, -0.28823419027995, -0.12985893506891621, 0.1903892581719267, -0.03184050927546089, -0.09383267667924, 0.07268806018221548, 0.020680792699332852,
+0.4124104415973873, 0.8393442622950833, -0.3082182209085838, -0.08392389966931191, 0.17557753337991408, -0.06089430185201959, -0.060979210117700314, 0.07480096866799445, -0.00912444833801258,
+0.4636476090008061, 0.8000000000000007, -0.3199999999996957, -0.04266666667605661, 0.15359999889982473, -0.0778239658747293, -0.03003587524248839, 0.0650216697636172, -0.028137145735138053,
+0.5123894603107377, 0.7596439169139467, -0.3245956202840571, -0.007420143865676024, 0.1280444834291926, -0.08415938485361943, -0.004911839804021753, 0.04925441732576568, -0.03316592632070903,
+0.5585993153435624, 0.7191011235955054, -0.3231915162227742, 0.021304010061479053, 0.10184143753536261, -0.08242614694536879, 0.012919164973409272, 0.03240065138755702, -0.03223937624428669,
+0.6022873461349642, 0.6790450928381959, -0.3170077886985954, 0.04362328866799965, 0.07708341693828792, -0.0753507567406053, 0.023734953728903288, 0.017581583432851745, -0.027346405912995427,
+0.6435011087932844, 0.6399999999999996, -0.30719999999978287, 0.06007466667246697, 0.05505023919687492, -0.06534727757601048, 0.028790802954853607, 0.006212149264184137, -0.019516816040973287,
+0.6823165548747481, 0.6023529411764702, -0.29479861591685924, 0.07142752588877758, 0.0363501990827262, -0.054279110952172305, 0.029678103967826764, -0.0015207345678007842, -0.01231452346046495,
+0.7188299996216245, 0.566371681415929, -0.2806797713214607, 0.07853829252651727, 0.02110209054585545, -0.04342140830045491, 0.027895069123844596, -0.006115180598091626, -0.005873713374935217,
+0.7531512809621944, 0.532224532224532, -0.26555901815810123, 0.0822502960399653, 0.009109040198374876, -0.033537465532893516, 0.024656086282221525, -0.008329021593801292, -0.0018123755428003157,
+0.7853981633974483, 0.4999999999999999, -0.24999999999958156, 0.0833333333348498, -0.0000000015443557967224647, -0.025000005591068682, 0.020835445851408983, -0.00892093816649993, -0.0009662780908537286
+];
+
+/// `atan(i/16 + x) - atan(i/16)` divided by `x`: `atan_eval` from `atan_utils.h`.
+fn libm_atan_eval(x : f64, i : i64) -> f64 {
+  let row = 9 * i;
+  let x2 = x * x;
+  let c0 = libm_multiply_add(x, LIBM_ATAN_COEFFS[row + 2], LIBM_ATAN_COEFFS[row + 1]);
+  let c1 = libm_multiply_add(x, LIBM_ATAN_COEFFS[row + 4], LIBM_ATAN_COEFFS[row + 3]);
+  let c2 = libm_multiply_add(x, LIBM_ATAN_COEFFS[row + 6], LIBM_ATAN_COEFFS[row + 5]);
+  let c3 = libm_multiply_add(x, LIBM_ATAN_COEFFS[row + 8], LIBM_ATAN_COEFFS[row + 7]);
+  let x4 = x2 * x2;
+  let d1 = libm_multiply_add(x2, c1, c0);
+  let d2 = libm_multiply_add(x2, c3, c2);
+  return libm_multiply_add(x4, d2, d1);
+}
+
+/// The arctangent, correctly rounded: `atanf` from `atanf.h`. Near zero and beyond 16 a
+/// Taylor polynomial (of `-1/x` beyond 16); between, `atan(k/16) + atan_eval` with
+/// `k = round(16 |x|)`, or of `1/|x|` above 1.
+fn libm_atanf(x : f32) -> f32 {
+  let x_u = libm_f32_to_bits(x);
+  let x_abs = x_u & 2147483647u32; // 0x7fffffff
+  let neg = (x_u >> 31u32) == 1u32;
+  let signed_pi_over_2 : f64 = if neg {
+    libm_f64_from_bits(13833125093779451160u64)
+  } else {
+    libm_f64_from_bits(4609753056924675352u64)
+  }; // -0x1.921fb54442d18p0, 0x1.921fb54442d18p0
+  // |x| <= 1/16 or |x| >= 16.
+  if x_abs <= 1031798784u32 || x_abs >= 1098907648u32 { // 0x3d800000, 0x41800000
+    let mut x_d = x as f64;
+    let mut const_term : f64 = 0.0;
+    if x_abs >= 1098907648u32 { // 0x41800000
+      if x_abs == 2139095040u32 { // 0x7f800000
+        return signed_pi_over_2 as f32;
+      }
+      if x_abs > 2139095040u32 { // 0x7f800000
+        return x;
+      }
+      x_d = -1.0 / x_d;
+      const_term = signed_pi_over_2;
+    }
+    if x_abs == 0u32 {
+      return x;
+    }
+    // |x| < 2^-12
+    if x_abs < 964689920u32 { // 0x39800000
+      return libm_multiply_add_f32(x, libm_f32_from_bits(3003121664u32), x); // -0x1.0p-25f
+    }
+    let x2 = x_d * x_d;
+    let x4 = x2 * x2;
+    let c0 = libm_multiply_add(x2, libm_f64_from_bits(13823048456275842389u64), 1.0); // -0x1.5555555555555p-2
+    let c1 = libm_multiply_add(x2, libm_f64_from_bits(13817687028148020370u64), libm_f64_from_bits(4596373779694328218u64)); // -0x1.2492492492492p-3, 0x1.999999999999ap-3
+    let c2 = libm_multiply_add(x2, libm_f64_from_bits(13814587147885025094u64), libm_f64_from_bits(4592670820000712476u64)); // -0x1.745d1745d1746p-4, 0x1.c71c71c71c71cp-4
+    let p = libm_multiply_add(x4, libm_multiply_add(x4, c2, c1), c0);
+    return libm_multiply_add(x_d, p, const_term) as f32;
+  }
+  let mut x_d : f64 = 0.0;
+  let mut const_term : f64 = 0.0;
+  let mut final_sign : f64 = 0.0;
+  let mut idx : i64 = 0;
+  if x_abs > 1065353216u32 { // 0x3f800000
+    x_d = 1.0 / (libm_f32_from_bits(x_abs) as f64);
+    let k_d = libm_round_even_f64(x_d * 16.0);
+    x_d = libm_multiply_add(k_d, -0.0625, x_d);
+    idx = k_d as i64;
+    final_sign = if neg {
+      1.0
+    } else {
+      -1.0
+    };
+    const_term = libm_multiply_add(final_sign, LIBM_ATAN_COEFFS[9 * idx], signed_pi_over_2);
+  } else {
+    // An input where the evaluation below would round the wrong way.
+    if x_abs == 1032678179u32 { // 0x3d8d6b23
+      if neg {
+        return libm_f32_from_bits(3180147139u32); // -0x1.1a6386p-4f
+      }
+      return libm_f32_from_bits(1032663491u32); // 0x1.1a6386p-4f
+    }
+    let x_f = libm_f32_from_bits(x_abs);
+    let k_f = libm_round_even_f32(x_f * 16.0);
+    x_d = libm_multiply_add_f32(k_f, -0.0625, x_f) as f64;
+    idx = k_f as i64;
+    final_sign = if neg {
+      -1.0
+    } else {
+      1.0
+    };
+    const_term = final_sign * LIBM_ATAN_COEFFS[9 * idx];
+  }
+  let p = libm_atan_eval(x_d, idx);
+  return libm_multiply_add(final_sign * x_d, p, const_term) as f32;
+}
+
+/// A double-double: `hi + lo`, with `|lo|` at most half a unit in the last place of `hi`.
+/// LLVM libc's `DoubleDouble`, from `FPUtil/double_double.h`.
+struct LibmDoubleDouble {
+  hi : f64,
+  lo : f64,
+}
+
+impl Copy for LibmDoubleDouble {}
+
+/// `a + b` as a double-double, exactly, for `|a| >= |b|` (Fast2Sum): `exact_add`.
+fn libm_dd_exact_add(a : f64, b : f64) -> LibmDoubleDouble {
+  let hi = a + b;
+  let t = hi - a;
+  return LibmDoubleDouble {
+    hi: hi, lo: b - t
+  };
+}
+
+/// `a + b`: `add`.
+fn libm_dd_add(a : LibmDoubleDouble, b : LibmDoubleDouble) -> LibmDoubleDouble {
+  let r = libm_dd_exact_add(a.hi, b.hi);
+  let lo = a.lo + b.lo;
+  return libm_dd_exact_add(r.hi, r.lo + lo);
+}
+
+/// `a * b`, dropping the product of the low parts: `quick_mult`.
+fn libm_dd_quick_mult(a : LibmDoubleDouble, b : LibmDoubleDouble) -> LibmDoubleDouble {
+  let hi = a.hi * b.hi;
+  let lo = libm_multiply_add(a.hi, b.hi, -hi);
+  let t1 = libm_multiply_add(a.hi, b.lo, lo);
+  let t2 = libm_multiply_add(a.lo, b.hi, t1);
+  return LibmDoubleDouble {
+    hi: hi, lo: t2
+  };
+}
+
+/// `a * b + c`: the double-double `multiply_add`.
+fn libm_dd_multiply_add(a : LibmDoubleDouble, b : LibmDoubleDouble, c : LibmDoubleDouble) -> LibmDoubleDouble {
+  return libm_dd_add(c, libm_dd_quick_mult(a, b));
+}
+
+/// `ATAN_I` from `atan2f.h`: `atan(i/16)` as double-doubles, `lo` at `[2i]` and `hi` at
+/// `[2i + 1]`.
+const LIBM_ATAN2F_ATAN_I : Tensor<f64, [34]> = [
+0.0, 0.0, -0.0000000000000000015490756308295046, 0.06241880999595735,
+-0.0000000000000000031253241424539383, 0.12435499454676144, 0.000000000000000004180692268843079, 0.18534794999569476,
+0.000000000000000010698755618734451, 0.24497866312686414, -0.000000000000000011010827903001369, 0.3028848683749714,
+-0.000000000000000024623815582638635, 0.35877067027057225, -0.00000000000000001587652227770689, 0.4124104415973873,
+0.000000000000000022698777452961687, 0.4636476090008061, -0.000000000000000025462781472855804, 0.5123894603107377,
+-0.0000000000000000054556305485916264, 0.5585993153435624, 0.00000000000000002950430737228402, 0.6022873461349642,
+0.000000000000000015834785051444286, 0.6435011087932844, 0.000000000000000006943223671560008, 0.6823165548747481,
+-0.000000000000000021478388444456983, 0.7188299996216245, -0.000000000000000024256934659182068, 0.7531512809621944,
+0.00000000000000003061616997868383, 0.7853981633974483
+];
+
+/// `COEFFS` from `atan2f.h`: the Taylor coefficients of atan, `(-1)^i / (2i + 1)`, as
+/// double-doubles, `lo` at `[2i]` and `hi` at `[2i + 1]`.
+const LIBM_ATAN2F_COEFFS : Tensor<f64, [18]> = [
+0.0, 1.0, -0.00000000000000001850371707708594, -0.3333333333333333,
+-0.000000000000000011102230246251566, 0.2, -0.00000000000000000793016446160826, -0.14285714285714285,
+0.0000000000000000061679056923619804, 0.1111111111111111, 0.000000000000000002523234146875356, -0.09090909090909091,
+-0.000000000000000004270088556250602, 0.07692307692307693, -0.0000000000000000009251858538542971, -0.06666666666666667,
+0.0000000000000000008163404592832033, 0.058823529411764705
+];
+
+/// `rr.hi`, moved one unit toward `rr.lo` when its bits below the target precision (`mask`)
+/// are all zero, so that rounding it to the target sees which side of a boundary the exact
+/// value is on. From the end of `atan2f_double_double`.
+fn libm_dd_nudge(rr : LibmDoubleDouble, mask : u64) -> f64 {
+  let mut rr_bits = libm_f64_to_bits(rr.hi);
+  if (rr_bits & mask) == 0u64 && rr.lo != 0.0 {
+    let hi_neg = (rr_bits >> 63u64) == 1u64;
+    let lo_neg = (libm_f64_to_bits(rr.lo) >> 63u64) == 1u64;
+    if hi_neg == lo_neg {
+      rr_bits = rr_bits + 1u64;
+    } else if (rr_bits & 4503599627370495u64) > 0u64 {
+      rr_bits = rr_bits - 1u64;
+    }
+  }
+  return libm_f64_from_bits(rr_bits);
+}
+
+/// The accurate pass of `atan2f`, for a result too near a rounding boundary to trust the
+/// fast one: `atan2f_double_double` from `atan2f.h`, the same reduction in double-double.
+/// It answers the double-double; `libm_dd_nudge` turns that into a double that rounds right.
+fn libm_atan2_double_double(num_d : f64, den_d : f64, q_d : f64, idx : i64, k_d : f64, final_sign : f64, const_hi : f64, const_lo : f64) -> LibmDoubleDouble {
+  let mut num_r = num_d;
+  let mut den_r = den_d;
+  let mut q_hi = q_d;
+  if idx != 0 {
+    let k = k_d * 0.0625;
+    // Exact.
+    num_r = libm_multiply_add(k, -den_d, num_d);
+    den_r = libm_multiply_add(k, num_d, den_d);
+    q_hi = num_r / den_r;
+  }
+  let q = LibmDoubleDouble {
+    hi: q_hi, lo: libm_multiply_add(q_hi, -den_r, num_r) / den_r
+  };
+  let q2 = libm_dd_quick_mult(q, q);
+  let mut p = LibmDoubleDouble {
+    hi: LIBM_ATAN2F_COEFFS[17], lo: LIBM_ATAN2F_COEFFS[16]
+  };
+  let mut j : i64 = 7;
+  while j >= 0 {
+    p = libm_dd_multiply_add(q2, p, LibmDoubleDouble {
+      hi: LIBM_ATAN2F_COEFFS[2 * j + 1], lo: LIBM_ATAN2F_COEFFS[2 * j]
+    });
+    j = j - 1;
+  }
+  let atan_i = LibmDoubleDouble {
+    hi: LIBM_ATAN2F_ATAN_I[2 * idx + 1], lo: LIBM_ATAN2F_ATAN_I[2 * idx]
+  };
+  let r_dd = libm_dd_add(LibmDoubleDouble {
+    hi: const_hi, lo: const_lo
+  }, libm_dd_multiply_add(q, p, atan_i));
+  return libm_dd_exact_add(r_dd.hi * final_sign, r_dd.lo * final_sign);
+}
+
+/// `atan2(y, x)`, the angle of the point `(x, y)`, correctly rounded: `atan2f` from
+/// `atan2f.h`. With `q = min(|x|, |y|) / max(|x|, |y|)` it is `atan(q)` from `atan_eval`,
+/// adjusted for the quadrant; a result too near a rounding boundary is redone in
+/// double-double.
+fn libm_atan2f(y : f32, x : f32) -> f32 {
+  return libm_atan2_value(y, x, 268435455u64, false) as f32;
+}
+
+/// `atan2(y, x)` as a double that rounds correctly to a format whose bits below its precision
+/// are `mask` in a double: the body of `atan2f`. `always_accurate` skips the fast path, for a
+/// format that the fast path's check does not cover.
+fn libm_atan2_value(y : f32, x : f32, mask : u64, always_accurate : bool) -> f64 {
+  let x_u = libm_f32_to_bits(x);
+  let y_u = libm_f32_to_bits(y);
+  let x_sign = (x_u >> 31u32) == 1u32;
+  let y_sign = (y_u >> 31u32) == 1u32;
+  let x_abs = x_u & 2147483647u32; // 0x7fffffff
+  let y_abs = y_u & 2147483647u32; // 0x7fffffff
+  let max_abs = if x_abs > y_abs {
+    x_abs
+  } else {
+    y_abs
+  };
+  let min_abs = if x_abs <= y_abs {
+    x_abs
+  } else {
+    y_abs
+  };
+  let num_d = libm_f32_from_bits(min_abs) as f64;
+  let den_d = libm_f32_from_bits(max_abs) as f64;
+  let y_neg : f64 = if y_sign {
+    -1.0
+  } else {
+    1.0
+  };
+  // An infinity, a NaN, or a zero.
+  if max_abs >= 2139095040u32 || num_d == 0.0 { // 0x7f800000
+    if x_abs > 2139095040u32 || y_abs > 2139095040u32 { // 0x7f800000, 0x7f800000
+      return libm_f32_from_bits(2143289344u32) as f64; // 0x7fc00000
+    }
+    let pi : f64 = libm_f64_from_bits(4614256656552045848u64); // 0x1.921fb54442d18p1
+    let pi_2 : f64 = libm_f64_from_bits(4609753056924675352u64); // 0x1.921fb54442d18p0
+    // y zero: 0 or pi; y finite: pi/2, or 0 or pi for an infinite x; y infinite: pi/2, or
+    // pi/4 or 3pi/4 for an infinite x.
+    let mut r : f64 = 0.0;
+    if y_abs == 0u32 {
+      r = if x_sign {
+        pi
+      } else {
+        0.0
+      };
+    } else if y_abs < 2139095040u32 { // 0x7f800000
+      if x_abs == 0u32 {
+        r = pi_2;
+      } else if x_abs == 2139095040u32 { // 0x7f800000
+        r = if x_sign {
+          pi
+        } else {
+          0.0
+        };
+      }
+    } else {
+      if x_abs < 2139095040u32 { // 0x7f800000
+        r = pi_2;
+      } else {
+        r = if x_sign {
+          libm_f64_from_bits(4612488097114038738u64)
+        } else {
+          libm_f64_from_bits(4605249457297304856u64)
+        }; // 0x1.2d97c7f3321d2p+1, 0x1.921fb54442d18p-1
+      }
+    }
+    return y_neg * r;
+  }
+  let recip = x_abs < y_abs;
+  let final_sign : f64 = if (x_sign != y_sign) != recip {
+    -1.0
+  } else {
+    1.0
+  };
+  // CONST_ADJ[x_sign][y_sign][recip]
+  let mut const_hi : f64 = 0.0;
+  let mut const_lo : f64 = 0.0;
+  if recip {
+    if x_sign {
+      const_hi = libm_f64_from_bits(4609753056924675352u64); // 0x1.921fb54442d18p0
+      const_lo = libm_f64_from_bits(4364452196894661639u64); // 0x1.1a62633145c07p-54
+    } else {
+      const_hi = libm_f64_from_bits(13833125093779451160u64); // -0x1.921fb54442d18p0
+      const_lo = libm_f64_from_bits(13587824233749437447u64); // -0x1.1a62633145c07p-54
+    }
+  } else if x_sign {
+    const_hi = libm_f64_from_bits(13837628693406821656u64); // -0x1.921fb54442d18p1
+    const_lo = libm_f64_from_bits(13592327833376807943u64); // -0x1.1a62633145c07p-53
+  } else if y_sign {
+    const_hi = -0.0;
+    const_lo = -0.0;
+  }
+  let q0 = num_d / den_d;
+  let k_d = libm_round_even_f64(q0 * 16.0);
+  let idx = k_d as i64;
+  let q_d = libm_multiply_add(k_d, -0.0625, q0);
+  let p = libm_atan_eval(q_d, idx);
+  let r = final_sign * libm_multiply_add(q_d, p, const_hi + LIBM_ATAN_COEFFS[9 * idx]);
+  // The bits below single precision: far enough from a rounding boundary, r is right.
+  let r_bits = libm_f64_to_bits(r) & 268435455u64;
+  if !always_accurate && r_bits > 4u64 && r_bits < 268435451u64 {
+    return r;
+  }
+  return libm_dd_nudge(libm_atan2_double_double(num_d, den_d, q_d, idx, k_d, final_sign, const_hi, const_lo), mask);
+}
+
+fn libm_asinf16(x : f16) -> f16 {
+  return libm_asinf(x as f32) as f16;
+}
+
+fn libm_acosf16(x : f16) -> f16 {
+  // x = -0x1.2cp-18
+  if libm_f16_to_bits(x) == 32843u16 {
+    return libm_f16_from_bits(15945u16); // 0x1.924p+0
+  }
+  // x = -0x1.2bcp-4
+  if libm_f16_to_bits(x) == 44207u16 {
+    return libm_f16_from_bits(16019u16); // 0x1.a4cp+0
+  }
+  // x = -0x1.1dp-1
+  if libm_f16_to_bits(x) == 47220u16 {
+    return libm_f16_from_bits(16467u16); // 0x1.14cp+1
+  }
+  return libm_acosf(x as f32) as f16;
+}
+
+fn libm_atanf16(x : f16) -> f16 {
+  // x = 0x1.d14p-6
+  if libm_f16_to_bits(x) == 10053u16 {
+    return libm_f16_from_bits(10053u16); // 0x1.d14p-6
+  }
+  // x = 0x1.ad4p-3
+  if libm_f16_to_bits(x) == 12981u16 {
+    return libm_f16_from_bits(12957u16); // 0x1.a74p-3
+  }
+  // x = 0x1.9b8p+2
+  if libm_f16_to_bits(x) == 18030u16 {
+    return libm_f16_from_bits(15787u16); // 0x1.6acp+0
+  }
+  // x = -0x1.d14p-6
+  if libm_f16_to_bits(x) == 42821u16 {
+    return libm_f16_from_bits(42821u16); // -0x1.d14p-6
+  }
+  // x = -0x1.ad4p-3
+  if libm_f16_to_bits(x) == 45749u16 {
+    return libm_f16_from_bits(45725u16); // -0x1.a74p-3
+  }
+  // x = -0x1.9b8p+2
+  if libm_f16_to_bits(x) == 50798u16 {
+    return libm_f16_from_bits(48555u16); // -0x1.6acp+0
+  }
+  return libm_atanf(x as f32) as f16;
+}
+
+fn libm_asin_bf16(x : bf16) -> bf16 {
+  return libm_bf16_from_f32(libm_asinf(libm_f32_from_bf16(x)));
+}
+
+fn libm_acos_bf16(x : bf16) -> bf16 {
+  return libm_bf16_from_f32(libm_acosf(libm_f32_from_bf16(x)));
+}
+
+fn libm_atan_bf16(x : bf16) -> bf16 {
+  return libm_bf16_from_f32(libm_atanf(libm_f32_from_bf16(x)));
+}
+
+/// `d` rounded to an f32 with round-to-odd: truncated toward zero, with the last bit set when
+/// anything was dropped. Rounding that again to a format at least two bits narrower is the
+/// same as rounding `d` once.
+fn libm_f32_round_odd(d : f64) -> f32 {
+  let f = d as f32;
+  if (f as f64) == d || f != f {
+    return f;
+  }
+  let mut b = libm_f32_to_bits(f);
+  // Rounded away from zero: step back toward it.
+  if (f as f64) * (f as f64) > d * d {
+    b = b - 1u32;
+  }
+  return libm_f32_from_bits(b | 1u32);
+}
+
+/// `atan2(y, x)` for f16, correctly rounded: the double-double accurate pass of `atan2f` on the
+/// inputs widened to f32, rounded once to f16.
+fn libm_atan2f16(y : f16, x : f16) -> f16 {
+  return libm_atan2_value(y as f32, x as f32, 2199023255551u64, true) as f16;
+}
+
+/// `atan2(y, x)` for bf16, correctly rounded: the double-double accurate pass of `atan2f` on
+/// the inputs widened to f32, rounded to f32 with round-to-odd and then to bf16.
+fn libm_atan2_bf16(y : bf16, x : bf16) -> bf16 {
+  return libm_bf16_from_f32(libm_f32_round_odd(libm_atan2_value(libm_f32_from_bf16(y), libm_f32_from_bf16(x), 17592186044415u64, true)));
+}
