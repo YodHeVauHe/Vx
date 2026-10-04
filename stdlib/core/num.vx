@@ -1312,31 +1312,6 @@ macro_rules stamp_float {
         };
       }
 
-      /// The length of the hypotenuse, the square root of `self * self + other * other`.
-      /// The smaller side is divided by the larger first, so neither square overflows or
-      /// underflows. Not the libm routine, so the last bit can differ from it.
-      fn hypot(self : $t, other : $t) -> $t {
-        let a = self.abs();
-        let b = other.abs();
-        let infinity : $t = $one / $zero;
-        if a == infinity || b == infinity {
-          return infinity;
-        }
-        if a.is_nan() || b.is_nan() {
-          return a + b;
-        }
-        let mut big = a;
-        let mut small = b;
-        if b > a {
-          big = b;
-          small = a;
-        }
-        if big == $zero {
-          return $zero;
-        }
-        let ratio = small / big;
-        return big * ($one + ratio * ratio).sqrt();
-      }
 
       /// Never negative, whatever the signs: -7.0 % 4.0 is -3.0 where this is 1.0.
       fn rem_euclid(self : $t, rhs : $t) -> $t {
@@ -1644,10 +1619,10 @@ macro_rules stamp_float_exps {
 
 stamp_float_exps!(f64 , 1.0);
 
-/// Stamps `asin`, `acos`, `atan` and `atan2` through the platform's `math` operations, for `f64`, which has no `core::libm`
+/// Stamps `asin`, `acos`, `atan`, `atan2` and `hypot` through the platform's `math` operations, for `f64`, which has no `core::libm`
 /// version yet. The other widths use `core::libm`'s.
 macro_rules stamp_float_inverse_trig {
-  ($t : ident) => {
+  ($t : ident , $one : expr , $zero : expr) => {
     impl $t {
       /// The angle in radians whose sine is this, between -pi/2 and pi/2.
       fn asin(self : $t) -> $t {
@@ -1677,11 +1652,36 @@ macro_rules stamp_float_inverse_trig {
           macro.yield %r : $t
         };
       }
+      /// The length of the hypotenuse, the square root of `self * self + other * other`.
+      /// The smaller side is divided by the larger first, so neither square overflows or
+      /// underflows. Not the libm routine, so the last bit can differ from it.
+      fn hypot(self : $t, other : $t) -> $t {
+        let a = self.abs();
+        let b = other.abs();
+        let infinity : $t = $one / $zero;
+        if a == infinity || b == infinity {
+          return infinity;
+        }
+        if a.is_nan() || b.is_nan() {
+          return a + b;
+        }
+        let mut big = a;
+        let mut small = b;
+        if b > a {
+          big = b;
+          small = a;
+        }
+        if big == $zero {
+          return $zero;
+        }
+        let ratio = small / big;
+        return big * ($one + ratio * ratio).sqrt();
+      }
     }
   };
 }
 
-stamp_float_inverse_trig!(f64);
+stamp_float_inverse_trig!(f64 , 1.0 , 0.0);
 
 /// Stamps `sin`, `cos` and `tan` through the platform's `math` operations, for `f64`, which has no `core::libm`
 /// version yet. The other widths use `core::libm`'s.
@@ -1889,6 +1889,12 @@ impl f32 {
   fn atan2(self : f32, x : f32) -> f32 {
     return libm_atan2f(self, x);
   }
+
+  /// The length of the hypotenuse, the square root of `self * self + other * other`, without
+  /// overflow or underflow in between; correctly rounded (LLVM libc's `hypotf`).
+  fn hypot(self : f32, other : f32) -> f32 {
+    return libm_hypotf(self, other);
+  }
 }
 
 impl f16 {
@@ -1977,6 +1983,12 @@ impl f16 {
   fn atan2(self : f16, x : f16) -> f16 {
     return libm_atan2f16(self, x);
   }
+
+  /// The length of the hypotenuse, the square root of `self * self + other * other`, without
+  /// overflow or underflow in between; correctly rounded (in double, rounded once).
+  fn hypot(self : f16, other : f16) -> f16 {
+    return libm_hypotf16(self, other);
+  }
 }
 
 impl bf16 {
@@ -2064,6 +2076,12 @@ impl bf16 {
   /// rounded (through LLVM libc's `atan2f`).
   fn atan2(self : bf16, x : bf16) -> bf16 {
     return libm_atan2_bf16(self, x);
+  }
+
+  /// The length of the hypotenuse, the square root of `self * self + other * other`, without
+  /// overflow or underflow in between; correctly rounded (in double, rounded once).
+  fn hypot(self : bf16, other : bf16) -> bf16 {
+    return libm_hypot_bf16(self, other);
   }
 }
 

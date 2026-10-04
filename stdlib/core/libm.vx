@@ -982,13 +982,20 @@ fn libm_f32_from_bf16(x : bf16) -> f32 {
 /// cannot be used: on a CPU with AVX512-BF16, LLVM converts with `vcvtneps2bf16`, which reads a
 /// subnormal input as zero and flushes a subnormal result to zero.
 fn libm_bf16_from_f32(x : f32) -> bf16 {
+  return libm_bf16_from_bits(libm_bf16_bits_from_f32(x));
+}
+
+/// The bits of `libm_bf16_from_f32(x)`. A bf16 function makes its result once, at its only
+/// return: on a CPU with AVX512-BF16, LLVM joins bf16 values from two branches through
+/// `vcvtneps2bf16`, which flushes a subnormal to zero.
+fn libm_bf16_bits_from_f32(x : f32) -> u16 {
   let b = libm_f32_to_bits(x);
   // NaN: keep the sign and the top of the payload, and make it quiet.
   if (b & 2147483647u32) > 2139095040u32 {
-    return libm_bf16_from_bits(((b >> 16u32) | 64u32) as u16);
+    return ((b >> 16u32) | 64u32) as u16;
   }
   let round = 32767u32 + ((b >> 16u32) & 1u32);
-  return libm_bf16_from_bits(((b + round) >> 16u32) as u16);
+  return ((b + round) >> 16u32) as u16;
 }
 
 /// `log(1 + i * 2^-7)` in single precision, for the 128 mantissas of a bf16: `LOG_1_PLUS_M`
@@ -1016,36 +1023,41 @@ const LIBM_BF16_LOG_1_PLUS_M : Tensor<f32, [128]> = [
 /// `x = 2^e * (1 + m)`, it is `e * log(2) + log(1 + m)`, the last read from a table indexed
 /// by the 7 bits of `m`.
 fn libm_log_bf16(x : bf16) -> bf16 {
-  let mut x_u = libm_bf16_to_bits(x);
+  return libm_bf16_from_bits(libm_log_bf16_bits(libm_bf16_to_bits(x)));
+}
+
+/// The bits of `libm_log_bf16`, from the bits of its input.
+fn libm_log_bf16_bits(x_bits : u16) -> u16 {
+  let mut x_u = x_bits;
   // Zero, one, negative, infinity and NaN.
   if x_u == 0u16 || x_u == 16256u16 || x_u >= 32640u16 {
     // NaN: a signaling one becomes quiet.
     if (x_u & 32767u16) > 32640u16 {
       if (x_u & 64u16) == 0u16 {
-        return libm_bf16_from_bits(32704u16);
+        return 32704u16;
       }
-      return x;
+      return x_u;
     }
     if (x_u & 32767u16) == 0u16 {
-      return libm_bf16_from_bits(65408u16);
+      return 65408u16;
     }
     if x_u == 16256u16 {
-      return libm_bf16_from_bits(0u16);
+      return 0u16;
     }
     if x_u > 32768u16 {
-      return libm_bf16_from_bits(32704u16);
+      return 32704u16;
     }
-    return x;
+    return x_u;
   }
   let mut e : i32 = -127;
   // Subnormal: scale by 2^7 into the normal range, exactly, in f32.
   if (x_u & 32640u16) == 0u16 {
-    x_u = (libm_f32_to_bits(libm_f32_from_bf16(x) * 128.0) >> 16u32) as u16;
+    x_u = (libm_f32_to_bits(libm_f32_from_bits((x_u as u32) << 16u32) * 128.0) >> 16u32) as u16;
     e = e - 7;
   }
   let m = (x_u & 127u16) as i64;
   e = e + (x_u >> 7u16) as i32;
-  return libm_bf16_from_f32(libm_multiply_add_f32(e as f32, libm_f32_from_bits(1060205080u32), LIBM_BF16_LOG_1_PLUS_M[m])); // 0x1.62e43p-1f
+  return libm_bf16_bits_from_f32(libm_multiply_add_f32(e as f32, libm_f32_from_bits(1060205080u32), LIBM_BF16_LOG_1_PLUS_M[m])); // 0x1.62e43p-1f
 }
 
 /// The logarithm to base two of a bf16, correctly rounded. LLVM libc has no `log2` for bf16:
@@ -2687,4 +2699,112 @@ fn libm_atan2f16(y : f16, x : f16) -> f16 {
 /// the inputs widened to f32, rounded to f32 with round-to-odd and then to bf16.
 fn libm_atan2_bf16(y : bf16, x : bf16) -> bf16 {
   return libm_bf16_from_f32(libm_f32_round_odd(libm_atan2_value(libm_f32_from_bf16(y), libm_f32_from_bf16(x), 17592186044415u64, true)));
+}
+
+/// `sqrt(x^2 + y^2)` without overflow or underflow in between, correctly rounded: `hypotf`
+/// from `hypotf.h`. The sum of squares is computed in double and its square root rounded to
+/// f32; when that double sits near a halfway point of f32, the error of the sum decides which
+/// way it goes.
+fn libm_hypotf(x : f32, y : f32) -> f32 {
+  let x_a = libm_f32_to_bits(x) & 2147483647u32; // 0x7fffffff
+  let y_a = libm_f32_to_bits(y) & 2147483647u32; // 0x7fffffff
+  // Infinity or NaN.
+  if x_a >= 2139095040u32 || y_a >= 2139095040u32 { // 0x7f800000, 0x7f800000
+    if libm_f32_is_signaling_nan(x_a) || libm_f32_is_signaling_nan(y_a) {
+      return libm_f32_from_bits(2143289344u32); // 0x7fc00000
+    }
+    if x_a == 2139095040u32 || y_a == 2139095040u32 { // 0x7f800000, 0x7f800000
+      return libm_f32_from_bits(2139095040u32); // 0x7f800000
+    }
+    return x + y;
+  }
+  let xd = x as f64;
+  let yd = y as f64;
+  let x_sq = xd * xd;
+  let sum_sq = libm_multiply_add(yd, yd, x_sq);
+  let r = libm_sqrt_f64(sum_sq);
+  let r_f = r as f32;
+  let mut r_u = libm_f64_to_bits(r);
+  let r_u32 = r_u & 4294967295u64;
+  // Near a halfway point of f32.
+  if ((r_u32 + 1u64) & 268435454u64) == 0u64 {
+    let r_d = r_f as f64;
+    let y_sq = yd * yd;
+    let a = if y_a < x_a {
+      x_sq
+    } else {
+      y_sq
+    };
+    let b = if y_a < x_a {
+      y_sq
+    } else {
+      x_sq
+    };
+    let e = b - libm_multiply_add(r_d, r_d, -a);
+    if e == 0.0 {
+      return r_f;
+    }
+    let sum_sq_lo = b - (sum_sq - a);
+    let err = sum_sq_lo - libm_multiply_add(r, r, -sum_sq);
+    if err > 0.0 {
+      r_u = r_u | 1u64;
+    } else if err < 0.0 && (r_u32 & 268435455u64) == 0u64 {
+      r_u = r_u - 1u64;
+    }
+    return libm_f64_from_bits(r_u) as f32;
+  }
+  return r_f;
+}
+
+/// The result of `hypot` on infinities and NaNs, as the bits of a 16-bit float whose exponent
+/// mask is `exp_mask` and quiet bit `quiet`, or 65536 (no 16-bit value) when neither input is
+/// one: a signaling NaN in either gives the quiet NaN, then an infinity in either gives
+/// infinity, then the NaN. The order of `hypotf16` and `hypotbf16`.
+fn libm_hypot16_special(x_bits : u16, y_bits : u16, exp_mask : u16, quiet : u16) -> u32 {
+  let x_a = x_bits & 32767u16;
+  let y_a = y_bits & 32767u16;
+  if x_a < exp_mask && y_a < exp_mask {
+    return 65536u32;
+  }
+  let x_snan = x_a > exp_mask && (x_a & quiet) == 0u16;
+  let y_snan = y_a > exp_mask && (y_a & quiet) == 0u16;
+  if x_snan || y_snan {
+    return (exp_mask | quiet) as u32;
+  }
+  if x_a == exp_mask || y_a == exp_mask {
+    return exp_mask as u32;
+  }
+  return (exp_mask | quiet) as u32;
+}
+
+/// `sqrt(x^2 + y^2)` for f16: the square root of the sum in double, rounded once to f16.
+fn libm_hypotf16(x : f16, y : f16) -> f16 {
+  let special = libm_hypot16_special(libm_f16_to_bits(x), libm_f16_to_bits(y), 31744u16, 512u16);
+  if special != 65536u32 {
+    return libm_f16_from_bits(special as u16);
+  }
+  let xd = x as f64;
+  let yd = y as f64;
+  return libm_sqrt_f64(libm_multiply_add(yd, yd, xd * xd)) as f16;
+}
+
+/// The bits of `hypot` of two bf16s, given by their bits: the square root of the sum in
+/// double, rounded to f32 with round-to-odd and then to bf16. In bits so that the bf16 result
+/// is made once, at the end (see `libm_f32_from_bf16`).
+fn libm_hypot_bf16_bits(x_bits : u16, y_bits : u16) -> u16 {
+  let special = libm_hypot16_special(x_bits, y_bits, 32640u16, 64u16);
+  if special != 65536u32 {
+    return special as u16;
+  }
+  let xd = libm_f32_from_bits((x_bits as u32) << 16u32) as f64;
+  let yd = libm_f32_from_bits((y_bits as u32) << 16u32) as f64;
+  let r = libm_f32_round_odd(libm_sqrt_f64(libm_multiply_add(yd, yd, xd * xd)));
+  // f32 to bf16, ties to even.
+  let b = libm_f32_to_bits(r);
+  return ((b + 32767u32 + ((b >> 16u32) & 1u32)) >> 16u32) as u16;
+}
+
+/// `sqrt(x^2 + y^2)` for bf16, correctly rounded.
+fn libm_hypot_bf16(x : bf16, y : bf16) -> bf16 {
+  return libm_bf16_from_bits(libm_hypot_bf16_bits(libm_bf16_to_bits(x), libm_bf16_to_bits(y)));
 }
