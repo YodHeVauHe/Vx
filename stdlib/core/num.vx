@@ -1287,13 +1287,6 @@ macro_rules stamp_float {
         return self - self.trunc();
       }
 
-      /// This raised to `n`.
-      fn powf(self : $t, n : $t) -> $t {
-        return mlir!( inputs : (%a = self : $t, %b = n : $t), returns : $t, dialects : ["math"]) {
-          %r = math.powf %a, %b : $t
-          macro.yield %r : $t
-        };
-      }
 
 
       /// This value's magnitude with `sign`'s sign.
@@ -1619,6 +1612,26 @@ macro_rules stamp_float_exps {
 
 stamp_float_exps!(f64 , 1.0);
 
+/// Stamps `powf` through the platform's `math` operation, for the widths without a `core::libm`
+/// version yet: `f64`, `f16` and `bf16`. `f32` uses `core::libm`'s.
+macro_rules stamp_float_pow {
+  ($t : ident) => {
+    impl $t {
+      /// This raised to `n`.
+      fn powf(self : $t, n : $t) -> $t {
+        return mlir!( inputs : (%a = self : $t, %b = n : $t), returns : $t, dialects : ["math"]) {
+          %r = math.powf %a, %b : $t
+          macro.yield %r : $t
+        };
+      }
+    }
+  };
+}
+
+stamp_float_pow!(f64);
+stamp_float_pow!(f16);
+stamp_float_pow!(bf16);
+
 /// Stamps `asin`, `acos`, `atan`, `atan2` and `hypot` through the platform's `math` operations, for `f64`, which has no `core::libm`
 /// version yet. The other widths use `core::libm`'s.
 macro_rules stamp_float_inverse_trig {
@@ -1894,6 +1907,11 @@ impl f32 {
   /// overflow or underflow in between; correctly rounded (LLVM libc's `hypotf`).
   fn hypot(self : f32, other : f32) -> f32 {
     return libm_hypotf(self, other);
+  }
+
+  /// This raised to `n`, correctly rounded (LLVM libc's `powf`).
+  fn powf(self : f32, n : f32) -> f32 {
+    return libm_powf(self, n);
   }
 }
 
