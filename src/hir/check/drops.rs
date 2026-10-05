@@ -19,8 +19,7 @@
 // raw pointer was taken from (`t.as_ptr()`) waits for the end of its block: no borrow
 // checker sees what a raw pointer is used for. Assigning a new tensor to an owner drops the
 // old one first, unless it was moved, or `c = a @ b` writes the product into `c`'s buffer.
-// A binary tensor operator moves its operands, as in Rust, so it drops them once it has its
-// result.
+// A tensor operator moves its operands, as in Rust, so it drops them once it has its result.
 //
 //===----------------------------------------------------------------------===//
 
@@ -269,8 +268,8 @@ impl<'a> TypeChecker<'a> {
         );
     }
 
-    /// The operands of a tensor operator, `a @ b` or `a + b`, that it moved: dropped right
-    /// after it.
+    /// The operands of a tensor operator, `a @ b`, `a + b` or `-a`, that it moved: dropped
+    /// right after it.
     pub(crate) fn drops_note_operands(&self, operands: &[(&Expr, &Type)]) {
         if !printing() || self.speculating {
             return;
