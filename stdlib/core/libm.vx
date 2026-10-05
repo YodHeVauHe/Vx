@@ -7014,3 +7014,567 @@ fn libm_log1p_value(x : f64, always_accurate : bool) -> f64 {
   }
   return libm_log1p_accurate(x_e, idx, v_dd_hi, v_dd_lo);
 }
+
+/// `EXP2_MID2` from `exp_constants.h`: `2^(i/4096)` as triple-doubles, `lo`, `mid` and `hi` at
+/// `[3i]`, `[3i + 1]` and `[3i + 2]`.
+const LIBM_EXP2_MID2 : Tensor<f64, [192]> = [
+0.0, 0.0, 1.0,
+0.000000000000000000000000000000003772979548850901, 0.00000000000000009336185335478462, 1.0001692397053021,
+0.000000000000000000000000000000000365532984508914, -0.000000000000000005141333931318957, 1.0003385080526823,
+0.0000000000000000000000000000000005206464843609872, 0.00000000000000006962424022020573, 1.0005078050469876,
+0.0000000000000000000000000000000006981980988270293, -0.000000000000000051151232976856676, 1.0006771306930664,
+0.0000000000000000000000000000000023697046808396328, 0.00000000000000008422990024586487, 1.0008464849957674,
+-0.000000000000000000000000000000001957285518913284, -0.00000000000000002824522074776168, 1.001015867959941,
+-0.000000000000000000000000000000004762594601427377, -0.00000000000000007180424565592132, 1.0011852795904375,
+-0.00000000000000000000000000000000011464476160847457, -0.000000000000000018973728416792993, 1.0013547198921082,
+-0.000000000000000000000000000000000928795936877474, 0.00000000000000009060441067269122, 1.0015241888698057,
+0.0000000000000000000000000000000060764756068910476, -0.0000000000000000717327634990032, 1.0016936865283832,
+-0.00000000000000000000000000000000038544338609778155, -0.00000000000000001330719624672266, 1.0018632128726943,
+0.0000000000000000000000000000000006797512556137893, 0.000000000000000025726925943221118, 1.002032767907594,
+0.000000000000000000000000000000002227409450166476, -0.00000000000000003929937785484517, 1.002202351637938,
+-0.0000000000000000000000000000000011579535047606974, 0.00000000000000008461377247994717, 1.0023719640685822,
+-0.0000000000000000000000000000000011086772737157575, -0.0000000000000000419488324163994, 1.0025416052043845,
+-0.0000000000000000000000000000000006580760184135584, -0.00000000000000003636615928692264, 1.0027112750502025,
+0.0000000000000000000000000000000012056091399570568, -0.000000000000000026109440632439383, 1.0028809736108952,
+0.0000000000000000000000000000000011339321389345606, 0.00000000000000001753078477982332, 1.0030507008913223,
+-0.0000000000000000000000000000000026772320276362763, 0.00000000000000005753923525628267, 1.0032204568963443,
+-0.00000000000000000000000000000000034840205097597224, -0.000000000000000008684922005117956, 1.0033902416308227,
+-0.00000000000000000000000000000000027283847969345938, 0.00000000000000009490035430981778, 1.0035600550996193,
+0.0000000000000000000000000000000010861828097742192, -0.00000000000000008710380605818422, 1.0037298973075977,
+-0.000000000000000000000000000000002941447597915759, 0.000000000000000034958916958571545, 1.003899768259621,
+0.0000000000000000000000000000000056430014272086384, 0.00000000000000009753787549840241, 1.004069667960554,
+0.000000000000000000000000000000005837079438552624, -0.00000000000000010576221196292857, 1.0042395964152628,
+0.000000000000000000000000000000002179710614158648, 0.00000000000000004209188738127126, 1.0044095536286128,
+0.0000000000000000000000000000000008565522731271806, -0.000000000000000016700166857554788, 1.0045795396054717,
+0.00000000000000000000000000000000009285306033313043, -0.000000000000000016231463554124514, 1.0047495543507072,
+-0.000000000000000000000000000000000494345170697773, 0.000000000000000023028539278028117, 1.004919597869188,
+-0.00000000000000000000000000000000014012033809789845, 0.000000000000000016418046976773032, 1.0050896701657839,
+-0.00000000000000000000000000000000064740113980537656, 0.000000000000000037266984318284137, 1.005259771245365,
+0.0000000000000000000000000000000026919761479528557, 0.00000000000000009499186535455032, 1.0054299011128027,
+0.000000000000000000000000000000001701201324118986, -0.00000000000000008680931314444582, 1.0056000597729693,
+0.0000000000000000000000000000000013192596320961701, 0.00000000000000004000547491030117, 1.005770247230737,
+0.000000000000000000000000000000005873888407364589, 0.00000000000000007190499111509974, 1.00594046349098,
+-0.0000000000000000000000000000000010460884247534148, -0.000000000000000013908068671065783, 1.006110708558573,
+0.000000000000000000000000000000000981687621053627, -0.0000000000000000814020864257305, 1.006280982438391,
+-0.000000000000000000000000000000002570746966607375, -0.00000000000000005762151043749534, 1.00645128513531,
+0.000000000000000000000000000000003788070355202934, 0.00000000000000006745278477310457, 1.0066216166542072,
+-0.0000000000000000000000000000000009634315957566585, 0.000000000000000018998557240346296, 1.0067919769999607,
+0.0000000000000000000000000000000005377391721258965, -0.00000000000000009637430032316407, 1.006962366177449,
+0.000000000000000000000000000000000673461401738596, -0.000000000000000012528654462453979, 1.0071327841915512,
+0.0000000000000000000000000000000022874877969556466, 0.00000000000000003020578887843694, 1.007303231047148,
+-0.0000000000000000000000000000000021500582511853098, -0.00000000000000004869394258608565, 1.0074737067491204,
+0.000000000000000000000000000000001568598557552607, 0.00000000000000005224029937687453, 1.0076442113023503,
+0.000000000000000000000000000000002735252329698607, -0.00000000000000009361543551478456, 1.0078147447117207,
+0.0000000000000000000000000000000039520263557685874, -0.0000000000000000865251323306195, 1.007985306982115,
+0.0000000000000000000000000000000024635520613731786, -0.00000000000000003252058756084308, 1.0081558981184175,
+-0.000000000000000000000000000000005548885590198837, -0.00000000000000009917232268060914, 1.0083265181255139,
+0.000000000000000000000000000000004985399171299538, -0.00000000000000007136047404162523, 1.0084971670082898,
+0.0000000000000000000000000000000014969925002704946, -0.00000000000000001726868371224322, 1.0086678447716324,
+-0.0000000000000000000000000000000013718039406011832, -0.0000000000000000661995469367394, 1.0088385514204294,
+-0.0000000000000000000000000000000030497396995234277, 0.000000000000000035654569015130204, 1.0090092869595693,
+0.0000000000000000000000000000000023384670048758583, 0.00000000000000003717310013708818, 1.0091800513939415,
+-0.000000000000000000000000000000002692545818452654, 0.00000000000000007062572406825528, 1.0093508447284363,
+0.0000000000000000000000000000000011834325402816263, -0.00000000000000001432141230342882, 1.0095216669679448,
+-0.000000000000000000000000000000000781531085085694, 0.00000000000000001566818801313411, 1.0096925181173586,
+0.0000000000000000000000000000000022600974619316654, -0.00000000000000011043695780393688, 1.0098633981815708,
+-0.000000000000000000000000000000002782171771272267, -0.00000000000000005767317427160398, 1.0100343071654745,
+0.0000000000000000000000000000000002614543106712474, 0.000000000000000004835484978440383, 1.0102052450739643,
+-0.0000000000000000000000000000000055816182716601926, 0.00000000000000007015121289715442, 1.0103762119119353,
+-0.00000000000000000000000000000000020256356155384454, 0.00000000000000007161802873619574, 1.0105472076842836,
+0.0000000000000000000000000000000021841584500543143, 0.0000000000000001050465913408405, 1.010718232395906
+];
+
+/// The Taylor polynomial of `exp` from `exp.h`, as double-doubles, `lo` at `[2i]` and `hi` at
+/// `[2i + 1]`.
+const LIBM_EXP_COEFFS_DD : Tensor<f64, [14]> = [
+0.0, 1.0, 0.0, 1.0,
+0.0, 0.5, 0.00000000000000000925185853854297, 0.16666666666666666,
+0.0000000000000000023129646346357427, 0.041666666666666664, 0.00000000000000000011564823173178714, 0.008333333333333333,
+-0.00000000000000000005300543954373577, 0.001388888888888889
+];
+
+/// The polynomial of `exp2` from `exp2.h`, as double-doubles, `lo` at `[2i]` and `hi` at
+/// `[2i + 1]`.
+const LIBM_EXP2_COEFFS_DD : Tensor<f64, [14]> = [
+0.0, 1.0, 0.000000000000000023190468138464576, 0.6931471805599453,
+-0.000000000000000009493931253184786, 0.24022650695910072, -0.0000000000000000031677282390002793, 0.05550410866482158,
+0.0000000000000000002836306484358366, 0.009618129107628477, -0.00000000000000000009597927132481008, 0.001333355814983819,
+0.0000000000000000000015636080759655632, 0.00015403530393384403
+];
+
+/// The Taylor polynomial of `expm1(x) / x` from `expm1.h`, as double-doubles, `lo` at `[2i]`
+/// and `hi` at `[2i + 1]`.
+const LIBM_EXPM1_COEFFS_DD : Tensor<f64, [14]> = [
+0.0, 1.0, 0.0, 0.5,
+0.00000000000000000925185853854297, 0.16666666666666666, 0.0000000000000000023129646346357427, 0.041666666666666664,
+0.00000000000000000011564823173178714, 0.008333333333333333, -0.00000000000000000005300543954373577, 0.001388888888888889,
+0.00000000000000000000017209558293420705, 0.0001984126984126984
+];
+
+/// The same three polynomials with 128-bit coefficients, written by `DYADIC`.
+const LIBM_EXP_COEFFS_128 : Tensor<u64, [32]> = [
+0, 18446744073709551489, 9223372036854775808, 0,
+0, 18446744073709551489, 9223372036854775808, 0,
+0, 18446744073709551488, 9223372036854775808, 0,
+0, 18446744073709551486, 12297829382473034410, 12297829382473034411,
+0, 18446744073709551484, 12297829382473034410, 12297829382473034411,
+0, 18446744073709551482, 9838263505978427528, 9838263505978427529,
+0, 18446744073709551479, 13117684674637903371, 6968769983401386166,
+0, 18446744073709551476, 14991639628157603853, 58561092297490640
+];
+const LIBM_EXP2_COEFFS_128 : Tensor<u64, [32]> = [
+0, 18446744073709551489, 9223372036854775808, 0,
+0, 18446744073709551488, 12786308645202655659, 14547668686819489455,
+0, 18446744073709551486, 17725587574382949699, 8698002800084809340,
+0, 18446744073709551484, 16381921401269255257, 11329673313224714391,
+0, 18446744073709551482, 11355082631444412750, 1748631367195998695,
+0, 18446744073709551479, 12593189617617438851, 4173178487785724553,
+0, 18446744073709551476, 11638578506214991274, 1202827264700627332,
+0, 18446744073709551472, 18439423718843888029, 8844706467831160953
+];
+const LIBM_EXPM1_COEFFS_128 : Tensor<u64, [28]> = [
+0, 18446744073709551489, 9223372036854775808, 0,
+0, 18446744073709551488, 9223372036854775808, 0,
+0, 18446744073709551486, 12297829382473034410, 12297829382473034411,
+0, 18446744073709551484, 12297829382473034410, 12297829382473034411,
+0, 18446744073709551482, 9838263505978427528, 9838263505978427529,
+0, 18446744073709551479, 13117684674637903371, 6968769983401386166,
+0, 18446744073709551476, 14991639628157603853, 58561092297490640
+];
+
+/// Coefficient `i` of the double-double polynomial of `exp` (`which` 0), `exp2` (1) or
+/// `expm1` (2).
+fn libm_exp_coeff_dd(which : i32, i : i64) -> LibmDoubleDouble {
+  if which == 0 {
+    return LibmDoubleDouble {
+      hi: LIBM_EXP_COEFFS_DD[2 * i + 1], lo: LIBM_EXP_COEFFS_DD[2 * i]
+    };
+  }
+  if which == 1 {
+    return LibmDoubleDouble {
+      hi: LIBM_EXP2_COEFFS_DD[2 * i + 1], lo: LIBM_EXP2_COEFFS_DD[2 * i]
+    };
+  }
+  return LibmDoubleDouble {
+    hi: LIBM_EXPM1_COEFFS_DD[2 * i + 1], lo: LIBM_EXPM1_COEFFS_DD[2 * i]
+  };
+}
+
+/// The degree-6 double-double polynomial of `exp` (`which` 0), `exp2` (1) or `expm1` (2) at
+/// `dx`, by Horner's rule: `polyeval`.
+fn libm_exp_poly_dd(which : i32, dx : LibmDoubleDouble) -> LibmDoubleDouble {
+  let mut p = libm_exp_coeff_dd(which, 6);
+  let mut i : i64 = 5;
+  while i >= 0 {
+    p = libm_dd_multiply_add(dx, p, libm_exp_coeff_dd(which, i));
+    i = i - 1;
+  }
+  return p;
+}
+
+/// Coefficient `i` of the 128-bit polynomial of `exp` (`which` 0), `exp2` (1) or `expm1` (2).
+fn libm_exp_coeff_128(which : i32, i : i64) -> LibmDyadic128 {
+  if which == 0 {
+    return libm_dyadic_from_parts(LIBM_EXP_COEFFS_128[4 * i], LIBM_EXP_COEFFS_128[4 * i + 1], LIBM_EXP_COEFFS_128[4 * i + 2], LIBM_EXP_COEFFS_128[4 * i + 3]);
+  }
+  if which == 1 {
+    return libm_dyadic_from_parts(LIBM_EXP2_COEFFS_128[4 * i], LIBM_EXP2_COEFFS_128[4 * i + 1], LIBM_EXP2_COEFFS_128[4 * i + 2], LIBM_EXP2_COEFFS_128[4 * i + 3]);
+  }
+  return libm_dyadic_from_parts(LIBM_EXPM1_COEFFS_128[4 * i], LIBM_EXPM1_COEFFS_128[4 * i + 1], LIBM_EXPM1_COEFFS_128[4 * i + 2], LIBM_EXPM1_COEFFS_128[4 * i + 3]);
+}
+
+/// The 128-bit polynomial of `exp` (`which` 0), `exp2` (1) or `expm1` (2) at `dx`, with
+/// coefficients 0 to `degree`, by Horner's rule: `polyeval`.
+fn libm_exp_poly_128(which : i32, degree : i64, dx : LibmDyadic128) -> LibmDyadic128 {
+  let mut p = libm_exp_coeff_128(which, degree);
+  let mut i = degree - 1;
+  while i >= 0 {
+    p = libm_dyadic_add(libm_exp_coeff_128(which, i), libm_dyadic_mul(dx, p));
+    i = i - 1;
+  }
+  return p;
+}
+
+/// `2^(idx1 / 64) * 2^(idx2 / 4096)` as a double-double, from the `hi` and `mid` parts of the
+/// two tables.
+fn libm_exp_mid_dd(idx1 : i64, idx2 : i64) -> LibmDoubleDouble {
+  let m1 = LibmDoubleDouble {
+    hi: LIBM_EXP2_MID1[3 * idx1 + 2], lo: LIBM_EXP2_MID1[3 * idx1 + 1]
+  };
+  let m2 = LibmDoubleDouble {
+    hi: LIBM_EXP2_MID2[3 * idx2 + 2], lo: LIBM_EXP2_MID2[3 * idx2 + 1]
+  };
+  return libm_dd_quick_mult(m1, m2);
+}
+
+/// `2^(idx1 / 64) * 2^(idx2 / 4096)` in 128 bits, from all three parts of the two tables.
+fn libm_exp_mid_128(idx1 : i64, idx2 : i64) -> LibmDyadic128 {
+  let m1 = libm_dyadic_add(libm_dyadic_from_f64(LIBM_EXP2_MID1[3 * idx1 + 2]), libm_dyadic_add(libm_dyadic_from_f64(LIBM_EXP2_MID1[3 * idx1 + 1]), libm_dyadic_from_f64(LIBM_EXP2_MID1[3 * idx1])));
+  let m2 = libm_dyadic_add(libm_dyadic_from_f64(LIBM_EXP2_MID2[3 * idx2 + 2]), libm_dyadic_add(libm_dyadic_from_f64(LIBM_EXP2_MID2[3 * idx2 + 1]), libm_dyadic_from_f64(LIBM_EXP2_MID2[3 * idx2])));
+  return libm_dyadic_mul(m1, m2);
+}
+
+/// `x` times `2^hi`, by adding `hi` to the exponent field. `x` and the result are normal.
+fn libm_f64_scale(x : f64, hi : i32) -> f64 {
+  return libm_f64_from_bits(((libm_f64_to_bits(x) as i64) + (hi as i64) * 4503599627370496) as u64);
+}
+
+/// The result of `libm_exp_ziv_denorm`: `ok` is false when the error bound does not decide the
+/// rounding.
+struct LibmZivResult {
+  ok : bool,
+  value : f64,
+}
+
+impl Copy for LibmZivResult {}
+
+/// `2^hi * (mid + lo)` rounded to a double that may be subnormal, when `err` bounds the error
+/// of `lo` well enough to decide the rounding: `ziv_test_denorm` from `exp_utils.h`. The value is
+/// scaled up by 2^1022 and 1.0 is added, which makes it round at the same place a subnormal
+/// would.
+fn libm_exp_ziv_denorm(hi : i32, mid : f64, lo : f64, err0 : f64) -> LibmZivResult {
+  let mut err = err0;
+  let exp_hi = ((hi + 1022) as i64) * 4503599627370496;
+  let mid_hi = libm_f64_from_bits(((libm_f64_to_bits(mid) as i64) + exp_hi) as u64);
+  let lo_scaled : f64 = if lo != 0.0 {
+    libm_f64_from_bits(((libm_f64_to_bits(lo) as i64) + exp_hi) as u64)
+  } else {
+    0.0
+  };
+  let mut extra_factor : f64 = 0.0;
+  // 1022 in the exponent field.
+  let mut scale_down = 4602678819172646912u64; // 0x3FE0000000000000
+  if (1.0 - mid_hi) > lo_scaled {
+    // The result is subnormal: one more rounding step, with its own error.
+    err = err + libm_f64_from_bits(4372995238176751616u64); // 0x1.0p-52
+    extra_factor = 1.0;
+    scale_down = 4607182418800017408u64; // 0x3FF0000000000000
+  }
+  let err_scaled = libm_f64_from_bits(((libm_f64_to_bits(err) as i64) + exp_hi) as u64);
+  let upper = extra_factor + (mid_hi + (lo_scaled + err_scaled));
+  let lower = extra_factor + (mid_hi + (lo_scaled - err_scaled));
+  return LibmZivResult {
+    ok: upper == lower, value: libm_f64_from_bits(libm_f64_to_bits(upper) - scale_down)
+  };
+}
+
+/// `exp(x)` for the `x` the fast path leaves out: `|x| <= 2^-53`, an `x` whose result
+/// overflows or rounds to zero, infinities and NaN. `set_exceptional` from `exp.h`.
+fn libm_exp_exceptional(x : f64) -> f64 {
+  let x_u = libm_f64_to_bits(x);
+  let x_abs = x_u & 9223372036854775807u64; // 0x7fffffffffffffff
+  if x_abs <= 4368491638549381120u64 { // 0x3ca0000000000000
+    // exp(x) ~ 1 + x
+    return 1.0 + x;
+  }
+  // x <= log(2^-1075), or -inf, or NaN with the sign bit set.
+  if x_u >= 13873137513782915154u64 { // 0xc0874910d52d3052
+    if x_u == 18442240474082181120u64 { // 0xfff0000000000000
+      return 0.0;
+    }
+    if x != x {
+      return x;
+    }
+    return 0.0;
+  }
+  // x is past log of the largest double, or +inf, or NaN.
+  return x + libm_f64_from_bits(9218868437227405312u64); // 0x7ff0000000000000
+}
+
+/// The 128-bit pass of `exp`: `exp_f128` from `exp.h`. `dx = x - kd * 2^-12 * log(2)` is
+/// recomputed in three parts.
+fn libm_exp_128(x : f64, kd : f64, idx1 : i64, idx2 : i64) -> f64 {
+  let t1 = libm_multiply_add(kd, libm_f64_from_bits(13773747375640150016u64), x); // -0x1.62e42ffp-13
+  let t2 = kd * libm_f64_from_bits(4397510237897097216u64); // 0x1.718432ap-47
+  let t3 = kd * libm_f64_from_bits(4254509830225397381u64); // 0x1.b0e2633fe0685p-79
+  let dx = libm_dyadic_add(libm_dyadic_from_f64(t1), libm_dyadic_add(libm_dyadic_from_f64(t2), libm_dyadic_from_f64(t3)));
+  let p = libm_exp_poly_128(0, 7, dx);
+  let mut r = libm_dyadic_mul(libm_exp_mid_128(idx1, idx2), p);
+  r.exponent = r.exponent + ((kd as i32) >> 12);
+  return libm_dyadic_to_f64(r);
+}
+
+/// The double-double pass of `exp`: `exp_double_double` from `exp.h`.
+fn libm_exp_dd(x : f64, kd : f64, exp_mid : LibmDoubleDouble) -> LibmDoubleDouble {
+  let t1 = libm_multiply_add(kd, libm_f64_from_bits(13773747375640150016u64), x); // -0x1.62e42ffp-13
+  let t2 = kd * libm_f64_from_bits(4397510237897097216u64); // 0x1.718432ap-47
+  let t3 = kd * libm_f64_from_bits(4254509830225397381u64); // 0x1.b0e2633fe0685p-79
+  let mut dx = libm_dd_exact_add(t1, t2);
+  dx.lo = dx.lo + t3;
+  return libm_dd_quick_mult(exp_mid, libm_exp_poly_dd(0, dx));
+}
+
+/// e raised to a double, correctly rounded: `exp` from `exp.h`. `x = log(2) * (hi + mid1 +
+/// mid2) + lo`, with `hi` an integer, `mid1` a multiple of 1/64 and `mid2` of 1/4096, so
+/// `exp(x) = 2^hi * 2^mid1 * 2^mid2 * exp(lo)`. The two middle factors come from tables and
+/// `exp(lo)` from a short polynomial. When the error bound does not decide the rounding, the
+/// result is computed again with double-doubles, then with 128-bit floats.
+fn libm_exp(x : f64) -> f64 {
+  let x_u = libm_f64_to_bits(x);
+  // x < log(2^-1075), or x >= log of the largest double, or |x| < 2^-53.
+  if x_u >= 13873137513782915154u64 || (x_u < 13591863675404156928u64 && x_u >= 4649454530587146736u64) || x_u < 4368491638549381120u64 { // 0xc0874910d52d3052, 0xbca0000000000000, 0x40862e42fefa39f0, 0x3ca0000000000000
+    return libm_exp_exceptional(x);
+  }
+  // k = round(x * log2(e) * 2^12): adding 2^33 + 2^32 + 2^-1, scaled down by 2^12, puts it in
+  // the low mantissa bits from bit 19 up.
+  let tmp = libm_multiply_add(x, libm_f64_from_bits(4609176140021203710u64), libm_f64_from_bits(4704009810788745216u64)); // 0x1.71547652b82fep+0, 0x1.800000004p21
+  let k = ((libm_f64_to_bits(tmp) >> 19u64) as u32) as i32;
+  let kd = k as f64;
+  let idx1 = ((k >> 6) & 63) as i64;
+  let idx2 = (k & 63) as i64;
+  let hi = k >> 12;
+  let denorm = hi <= -1022;
+  let exp_mid = libm_exp_mid_dd(idx1, idx2);
+  // dx = x - k * 2^-12 * log(2), within 2^-54.
+  let lo_h = libm_multiply_add(kd, libm_f64_from_bits(13773747375640150016u64), x); // -0x1.62e42ffp-13
+  let dx = libm_multiply_add(kd, libm_f64_from_bits(4397510237898870310u64), lo_h); // 0x1.718432a1b0e26p-47
+  let mid_lo = dx * exp_mid.hi;
+  // expm1(dx) / dx ~ 1 + dx / 2 + dx^2 / 6 + dx^3 / 24.
+  let dx2 = dx * dx;
+  let c0 = libm_multiply_add(dx, 0.5, 1.0);
+  let c1 = libm_multiply_add(dx, libm_f64_from_bits(4586165620538955093u64), libm_f64_from_bits(4595172819793696085u64)); // 0x1.5555555555555p-5, 0x1.5555555555555p-3
+  let p = libm_multiply_add(dx2, c1, c0);
+  let lo = libm_multiply_add(p, mid_lo, exp_mid.lo);
+  let err_d = libm_f64_from_bits(4325707442089361408u64); // 0x1.8p-63
+  if denorm {
+    let r = libm_exp_ziv_denorm(hi, exp_mid.hi, lo, err_d);
+    if r.ok {
+      return r.value;
+    }
+  } else {
+    let upper = exp_mid.hi + (lo + err_d);
+    let lower = exp_mid.hi + (lo - err_d);
+    if upper == lower {
+      return libm_f64_scale(upper, hi);
+    }
+  }
+  let r_dd = libm_exp_dd(x, kd, exp_mid);
+  let err_dd = libm_f64_from_bits(4161326055690338304u64); // 0x1.0p-99
+  if denorm {
+    let r = libm_exp_ziv_denorm(hi, r_dd.hi, r_dd.lo, err_dd);
+    if r.ok {
+      return r.value;
+    }
+  } else {
+    let upper_dd = r_dd.hi + (r_dd.lo + err_dd);
+    let lower_dd = r_dd.hi + (r_dd.lo - err_dd);
+    if upper_dd == lower_dd {
+      return libm_f64_scale(upper_dd, hi);
+    }
+  }
+  return libm_exp_128(x, kd, idx1, idx2);
+}
+
+/// The 128-bit pass of `exp2`: `exp2_f128` from `exp2.h`.
+fn libm_exp2_128(dx : f64, hi : i32, idx1 : i64, idx2 : i64) -> f64 {
+  let p = libm_exp_poly_128(1, 7, libm_dyadic_from_f64(dx));
+  let mut r = libm_dyadic_mul(libm_exp_mid_128(idx1, idx2), p);
+  r.exponent = r.exponent + hi;
+  return libm_dyadic_to_f64(r);
+}
+
+/// The reduction `exp2` and its subnormal path share: `k = round(x * 2^12)`, and the fast
+/// pass's `exp_mid` and `lo`.
+struct LibmExp2Reduced {
+  hi : i32,
+  idx1 : i64,
+  idx2 : i64,
+  dx : f64,
+  exp_mid : LibmDoubleDouble,
+  lo : f64,
+}
+
+impl Copy for LibmExp2Reduced {}
+
+/// `x = hi + mid1 + mid2 + dx` with `mid1` a multiple of 1/64, `mid2` of 1/4096 and
+/// `|dx| <= 2^-13`, and the fast pass's estimate `2^(mid1 + mid2) * 2^dx ~ exp_mid.hi + lo`.
+fn libm_exp2_reduce(x : f64) -> LibmExp2Reduced {
+  let k = ((libm_f64_to_bits(x + libm_f64_from_bits(4704009810788745216u64)) >> 19u64) as u32) as i32; // 0x1.800000004p21
+  let kd = k as f64;
+  let exp_mid = libm_exp_mid_dd(((k >> 6) & 63) as i64, (k & 63) as i64);
+  // Exact.
+  let dx = libm_multiply_add(kd, libm_f64_from_bits(13776511260126347264u64), x); // -0x1.0p-12
+  let mid_lo = dx * exp_mid.hi;
+  // (2^dx - 1) / dx as a degree-3 polynomial.
+  let dx2 = dx * dx;
+  let c0 = libm_multiply_add(dx, libm_f64_from_bits(4597823092348339598u64), libm_f64_from_bits(4604418534313441775u64)); // 0x1.ebfbdff82c58ep-3, 0x1.62e42fefa39efp-1
+  let c1 = libm_multiply_add(dx, libm_f64_from_bits(4576698096660601481u64), libm_f64_from_bits(4588159806396435470u64)); // 0x1.3b2aba7a95a89p-7, 0x1.c6b08e8fc0c0ep-5
+  let p = libm_multiply_add(dx2, c1, c0);
+  return LibmExp2Reduced {
+    hi: k >> 12, idx1: ((k >> 6) & 63) as i64, idx2: (k & 63) as i64, dx: dx, exp_mid: exp_mid, lo: libm_multiply_add(p, mid_lo, exp_mid.lo)
+  };
+}
+
+/// `exp2(x)` when the result may be subnormal, `-1075 < x <= -1022`: `exp2_denorm` from
+/// `exp2.h`.
+fn libm_exp2_denorm(x : f64) -> f64 {
+  let s = libm_exp2_reduce(x);
+  let r = libm_exp_ziv_denorm(s.hi, s.exp_mid.hi, s.lo, libm_f64_from_bits(4323455642275676160u64)); // 0x1.0p-63
+  if r.ok {
+    return r.value;
+  }
+  let r_dd = libm_dd_quick_mult(s.exp_mid, libm_exp_poly_dd(1, LibmDoubleDouble {
+    hi: s.dx, lo: 0.0
+  }));
+  let r2 = libm_exp_ziv_denorm(s.hi, r_dd.hi, r_dd.lo, libm_f64_from_bits(4156822456062967808u64)); // 0x1.0p-100
+  if r2.ok {
+    return r2.value;
+  }
+  return libm_exp2_128(s.dx, s.hi, s.idx1, s.idx2);
+}
+
+/// Two raised to a double, correctly rounded: `exp2` from `exp2.h`. The same scheme as
+/// `libm_exp`, without the multiplication by `log2(e)`, so the reduction is exact.
+fn libm_exp2(x : f64) -> f64 {
+  let x_u = libm_f64_to_bits(x);
+  // x < -1022, or x >= 1024, or |x| < 2^-54 * log2(e), or infinity or NaN.
+  if x_u > 13875572859742453760u64 || (x_u <= 13589353796997972734u64 && x_u >= 4652218415073722368u64) || x_u <= 4370485359770567421u64 { // 0xc08ff00000000000, 0xbc971547652b82fe, 0x4090000000000000, 0x3ca71547652b82fd
+    if (x_u & 9223372036854775807u64) <= 4370485359770567421u64 { // 0x7fffffffffffffff, 0x3ca71547652b82fd
+      // 2^x ~ 1 + x * log(2), which rounds like 1 + x / 2.
+      return libm_multiply_add(x, 0.5, 1.0);
+    }
+    if x_u > 13875572859742453760u64 { // 0xc08ff00000000000
+      // x <= -1075, or -inf, or NaN with the sign bit set.
+      if x_u >= 13875814752300564480u64 { // 0xc090cc0000000000
+        if x != x {
+          return x + libm_f64_from_bits(9218868437227405312u64); // 0x7ff0000000000000
+        }
+        return 0.0;
+      }
+      return libm_exp2_denorm(x);
+    }
+    // x >= 1024, or +inf, or NaN.
+    if x != x {
+      return x + libm_f64_from_bits(9218868437227405312u64); // 0x7ff0000000000000
+    }
+    return libm_f64_from_bits(9218868437227405312u64); // 0x7ff0000000000000
+  }
+  let s = libm_exp2_reduce(x);
+  let err_d = libm_f64_from_bits(4323455642275676160u64); // 0x1.0p-63
+  let upper = s.exp_mid.hi + (s.lo + err_d);
+  let lower = s.exp_mid.hi + (s.lo - err_d);
+  if upper == lower {
+    return libm_f64_scale(upper, s.hi);
+  }
+  let r_dd = libm_dd_quick_mult(s.exp_mid, libm_exp_poly_dd(1, LibmDoubleDouble {
+    hi: s.dx, lo: 0.0
+  }));
+  let err_dd = libm_f64_from_bits(4156822456062967808u64); // 0x1.0p-100
+  let upper_dd = r_dd.hi + (r_dd.lo + err_dd);
+  let lower_dd = r_dd.hi + (r_dd.lo - err_dd);
+  if upper_dd == lower_dd {
+    return libm_f64_scale(upper_dd, s.hi);
+  }
+  return libm_exp2_128(s.dx, s.hi, s.idx1, s.idx2);
+}
+
+/// The 128-bit pass of `expm1`: `expm1_f128` from `expm1.h`. `2^(hi + mid) * exp(dx) - 1` is
+/// computed as `(2^mid - 2^-hi) + 2^mid * dx * P(dx)`, then scaled by `2^hi`.
+fn libm_expm1_128(x : f64, kd : f64, idx1 : i64, idx2 : i64) -> f64 {
+  let t1 = libm_multiply_add(kd, libm_f64_from_bits(13773747375640150016u64), x); // -0x1.62e42ffp-13
+  let t2 = kd * libm_f64_from_bits(4397510237897097216u64); // 0x1.718432ap-47
+  let t3 = kd * libm_f64_from_bits(4254509830225397381u64); // 0x1.b0e2633fe0685p-79
+  let dx = libm_dyadic_add(libm_dyadic_from_f64(t1), libm_dyadic_add(libm_dyadic_from_f64(t2), libm_dyadic_from_f64(t3)));
+  let exp_mid = libm_exp_mid_128(idx1, idx2);
+  let hi = (kd as i32) >> 12;
+  let minus_one = LibmDyadic128 {
+    negative: true, exponent: -127 - hi, hi: 9223372036854775808u64, lo: 0u64 // 0x8000000000000000
+  };
+  let exp_mid_m1 = libm_dyadic_add(exp_mid, minus_one);
+  let p = libm_exp_poly_128(2, 6, dx);
+  let mut r = libm_dyadic_add(exp_mid_m1, libm_dyadic_mul(libm_dyadic_mul(exp_mid, dx), p));
+  r.exponent = r.exponent + hi;
+  return libm_dyadic_to_f64(r);
+}
+
+/// `expm1(x)` for the `x` the fast path leaves out: `|x| <= 2^-53`, `x <= -37.5`, an `x` whose
+/// result overflows, infinities and NaN. `set_exceptional` from `expm1.h`.
+fn libm_expm1_exceptional(x : f64) -> f64 {
+  let x_u = libm_f64_to_bits(x);
+  let x_abs = x_u & 9223372036854775807u64; // 0x7fffffffffffffff
+  if x_abs <= 4368491638549381120u64 { // 0x3ca0000000000000
+    // expm1(x) ~ x.
+    if x_abs <= 247697979505377280u64 { // 0x0370000000000000
+      if x_abs == 0u64 {
+        return x;
+      }
+      // Scaled up so that the rounding of x + x^2 / 2 is right for a tiny or subnormal x.
+      return libm_f64_from_bits(3706462493325918208u64) * libm_multiply_add(x, libm_f64_from_bits(5507902344274116608u64), libm_f64_from_bits(4503599627370496u64)); // 0x1.0p-200, 0x1.0p+200, 0x1.0p-1022
+    }
+    return x;
+  }
+  // x <= -37.5, or -inf, or NaN with the sign bit set: expm1(x) rounds to -1.
+  if x_u >= 13853836650999914722u64 { // 0xc042b708872320e2
+    if x_u == 18442240474082181120u64 { // 0xfff0000000000000
+      return -1.0;
+    }
+    if x != x {
+      return x;
+    }
+    return -1.0;
+  }
+  // x is past log of the largest double, or +inf, or NaN.
+  return x + libm_f64_from_bits(9218868437227405312u64); // 0x7ff0000000000000
+}
+
+/// `e^x - 1` for a double, correctly rounded, and accurate for a small `x` where `exp(x) - 1`
+/// would lose every significant digit: `expm1` from `expm1.h`. The same reduction as
+/// `libm_exp`; the `- 1` is folded into the table value as `2^mid - 2^-hi`, which is exact.
+fn libm_expm1(x : f64) -> f64 {
+  let x_u = libm_f64_to_bits(x);
+  let x_is_neg = (x_u >> 63u64) == 1u64;
+  // x <= -37.5, or x >= log of the largest double, or |x| <= 2^-53.
+  if x_u >= 13853836650999914722u64 || (x_u <= 13591863675404156928u64 && x_u >= 4649454530587146736u64) || x_u <= 4368491638549381120u64 { // 0xc042b708872320e2, 0xbca0000000000000, 0x40862e42fefa39f0, 0x3ca0000000000000
+    return libm_expm1_exceptional(x);
+  }
+  let tmp = libm_multiply_add(x, libm_f64_from_bits(4609176140021203710u64), libm_f64_from_bits(4704009810788745216u64)); // 0x1.71547652b82fep+0, 0x1.800000004p21
+  let k = ((libm_f64_to_bits(tmp) >> 19u64) as u32) as i32;
+  let kd = k as f64;
+  let idx1 = ((k >> 6) & 63) as i64;
+  let idx2 = (k & 63) as i64;
+  let hi = k >> 12;
+  let exp_mid = libm_exp_mid_dd(idx1, idx2);
+  // -2^-hi, exactly.
+  let one_scaled = libm_f64_from_bits(9223372036854775808u64 | (((1023 - hi) as u64) << 52u64)); // 0x8000000000000000
+  // exp_mid.hi - 2^-hi, added larger first: exact.
+  let mut hi_part = if x_is_neg {
+    libm_dd_exact_add(one_scaled, exp_mid.hi)
+  } else {
+    libm_dd_exact_add(exp_mid.hi, one_scaled)
+  };
+  hi_part.lo = hi_part.lo + exp_mid.lo;
+  let lo_h = libm_multiply_add(kd, libm_f64_from_bits(13773747375640150016u64), x); // -0x1.62e42ffp-13
+  let dx = libm_multiply_add(kd, libm_f64_from_bits(4397510237898870310u64), lo_h); // 0x1.718432a1b0e26p-47
+  let mid_lo = dx * exp_mid.hi;
+  let dx2 = dx * dx;
+  let c0 = libm_multiply_add(dx, 0.5, 1.0);
+  let c1 = libm_multiply_add(dx, libm_f64_from_bits(4586165620538955093u64), libm_f64_from_bits(4595172819793696085u64)); // 0x1.5555555555555p-5, 0x1.5555555555555p-3
+  let p = libm_multiply_add(dx2, c1, c0);
+  let lo = libm_multiply_add(p, mid_lo, hi_part.lo);
+  // For a negative x the result is near -1, not 2^-hi, so the error bound is scaled by 2^-hi.
+  let err : u64 = if x_is_neg {
+    ((-hi) as u64) << 52u64
+  } else {
+    0u64
+  };
+  let err_d = libm_f64_from_bits(4325707442089361408u64 + err); // 0x3c08000000000000
+  let upper = hi_part.hi + (lo + err_d);
+  let lower = hi_part.hi + (lo - err_d);
+  if upper == lower {
+    return libm_f64_scale(upper, hi);
+  }
+  let t1 = libm_multiply_add(kd, libm_f64_from_bits(13773747375640150016u64), x); // -0x1.62e42ffp-13
+  let t2 = kd * libm_f64_from_bits(4397510237897097216u64); // 0x1.718432ap-47
+  let t3 = kd * libm_f64_from_bits(4254509830225397381u64); // 0x1.b0e2633fe0685p-79
+  let mut dx_dd = libm_dd_exact_add(t1, t2);
+  dx_dd.lo = dx_dd.lo + t3;
+  let p_dd = libm_exp_poly_dd(2, dx_dd);
+  let r_dd = libm_dd_multiply_add(libm_dd_quick_mult(exp_mid, dx_dd), p_dd, hi_part);
+  let err_dd = libm_f64_from_bits(4161326055690338304u64 + err); // 0x39c0000000000000
+  let upper_dd = r_dd.hi + (r_dd.lo + err_dd);
+  let lower_dd = r_dd.hi + (r_dd.lo - err_dd);
+  if upper_dd == lower_dd {
+    return libm_f64_scale(upper_dd, hi);
+  }
+  return libm_expm1_128(x, kd, idx1, idx2);
+}

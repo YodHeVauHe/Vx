@@ -1517,52 +1517,6 @@ stamp_float!(f64 , 1.0 , 0.0 , 180.0);
 stamp_float!(f16 , 1.0 , 0.0 , 180.0);
 stamp_float!(bf16 , 1.0 , 0.0 , 180.0);
 
-/// Stamps `exp`, `exp2` and `exp_m1` through the platform's `math` operations, for `f64`, which
-/// has no `core::libm` version yet. The other widths use `core::libm`'s.
-macro_rules stamp_float_exps {
-  ($t : ident , $one : expr) => {
-    impl $t {
-      /// e raised to this.
-      fn exp(self : $t) -> $t {
-        return mlir!( inputs : (%a = self : $t), returns : $t, dialects : ["math"]) {
-          %r = math.exp %a : $t
-          macro.yield %r : $t
-        };
-      }
-
-      /// Two raised to this.
-      fn exp2(self : $t) -> $t {
-        return mlir!( inputs : (%a = self : $t), returns : $t, dialects : ["math"]) {
-          %r = math.exp2 %a : $t
-          macro.yield %r : $t
-        };
-      }
-
-      /// `exp` minus one, kept accurate for a small argument where the subtraction would
-      /// lose every significant digit.
-      ///
-      /// Not `math.expm1`, which lowers to exactly that subtraction. This is Kahan's method:
-      /// with `u = exp(x)`, `(u - 1) * x / ln(u)`, whose two rounding errors cancel.
-      fn exp_m1(self : $t) -> $t {
-        let u = self.exp();
-        if u == $one {
-          return self;
-        }
-        let um1 = u - $one;
-        if um1 == -$one {
-          return um1;
-        }
-        if u.is_infinite() {
-          return u;
-        }
-        return um1 * self / u.ln();
-      }
-    }
-  };
-}
-
-stamp_float_exps!(f64 , 1.0);
-
 /// Stamps `powf` through the platform's `math` operation, for `f64`, which has no `core::libm`
 /// version yet.
 macro_rules stamp_float_pow {
@@ -1769,6 +1723,22 @@ impl f64 {
   /// `log1p`).
   fn ln_1p(self : f64) -> f64 {
     return libm_log1p(self);
+  }
+
+  /// e raised to this, correctly rounded (LLVM libc's `exp`).
+  fn exp(self : f64) -> f64 {
+    return libm_exp(self);
+  }
+
+  /// Two raised to this, correctly rounded (LLVM libc's `exp2`).
+  fn exp2(self : f64) -> f64 {
+    return libm_exp2(self);
+  }
+
+  /// `exp` minus one, correctly rounded, so a small argument keeps its digits (LLVM libc's
+  /// `expm1`).
+  fn exp_m1(self : f64) -> f64 {
+    return libm_expm1(self);
   }
 }
 
