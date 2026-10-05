@@ -1517,19 +1517,11 @@ stamp_float!(f64 , 1.0 , 0.0 , 180.0);
 stamp_float!(f16 , 1.0 , 0.0 , 180.0);
 stamp_float!(bf16 , 1.0 , 0.0 , 180.0);
 
-/// Stamps `ln`, `log2`, `log10` and `ln_1p` through the platform's `math` operations, for the
-/// widths without a `core::libm` version yet: `f64`. The other widths use `core::libm`'s.
+/// Stamps `log2`, `log10` and `ln_1p` through the platform's `math` operations, for the widths
+/// without a `core::libm` version yet: `f64`. The other widths use `core::libm`'s.
 macro_rules stamp_float_logs {
   ($t : ident , $one : expr) => {
     impl $t {
-      /// The natural logarithm.
-      fn ln(self : $t) -> $t {
-        return mlir!( inputs : (%a = self : $t), returns : $t, dialects : ["math"]) {
-          %r = math.log %a : $t
-          macro.yield %r : $t
-        };
-      }
-
       /// The logarithm to base two.
       fn log2(self : $t) -> $t {
         return mlir!( inputs : (%a = self : $t), returns : $t, dialects : ["math"]) {
@@ -1797,6 +1789,13 @@ macro_rules stamp_float_inverse_hyperbolic {
 stamp_float_inverse_hyperbolic!(f64 , 1.0 , 0.0);
 stamp_float_inverse_hyperbolic!(f16 , 1.0 , 0.0);
 stamp_float_inverse_hyperbolic!(bf16 , 1.0 , 0.0);
+
+impl f64 {
+  /// The natural logarithm, correctly rounded (LLVM libc's `log`).
+  fn ln(self : f64) -> f64 {
+    return libm_log(self);
+  }
+}
 
 impl f32 {
   /// The inverse hyperbolic sine, correctly rounded (LLVM libc's `asinhf`).
