@@ -50,6 +50,65 @@ fn unused_parameter(t : Tensor<f32, [4]>) -> i32 {
   return 0;
 }
 
+// `t = t + b` moves the old `t` into `+`: it is freed once the sum is computed, before the
+// sum is stored in `t`.
+fn reassigned_from_itself(b : Tensor<f32, [4]>) -> Tensor<f32, [4]> {
+  let mut t = Tensor<f32, [4]>::new();
+  t = t + b;
+  return t;
+}
+
+// Given a value again only inside the `if`: `a` holds a value only on that path, so its
+// drop needs a flag, set where `a` moves and cleared where it gets the new value.
+fn refilled_on_one_path(d : bool) -> f32 {
+  let mut a = Tensor<f32, [4]>::new();
+  let s = take(a);
+  if d {
+    a = Tensor<f32, [4]>::new();
+  }
+  return s;
+}
+
+fn pass(t : Tensor<f32, [4]>) -> Tensor<f32, [4]> {
+  return t;
+}
+
+// `t = pass(t)` moves `t` and gives it a value again: the flag ends up cleared.
+fn moved_and_refilled_on_one_path(c : bool) -> f32 {
+  let mut t = Tensor<f32, [4]>::new();
+  if c {
+    t = pass(t);
+  }
+  return t[0];
+}
+
+// A tensor of the loop body is freed before a `break` or `continue` leaves it.
+fn leaving_a_loop() -> f32 {
+  let mut s = 0.0;
+  for i in 0..4 {
+    let a = Tensor<f32, [4]>::new();
+    if i == 1 {
+      continue;
+    }
+    if i == 3 {
+      break;
+    }
+    s = s + a[0];
+  }
+  return s;
+}
+
+// The `if` arm's last expression reads `a`, so `a` is freed after the arm's value.
+fn arm_value(c : bool) -> f32 {
+  let x : f32 = if c {
+    let a = Tensor<f32, [4]>::new();
+    a[0]
+  } else {
+    0.0
+  };
+  return x;
+}
+
 fn main() -> i32 {
   return 0;
 }
@@ -83,3 +142,41 @@ fn main() -> i32 {
 // CHECK-LABEL: Function: unused_parameter
 // CHECK-NEXT: Drop t, after the value
 // CHECK-NEXT: Return
+
+// CHECK-LABEL: Function: reassigned_from_itself
+// CHECK:      Drop t, after the value
+// CHECK-NEXT: Assign
+// CHECK-NEXT: Identifier(t)
+// CHECK-NEXT: BinaryOp(Add)
+// CHECK-NEXT: Identifier(t)
+// CHECK-NEXT: Identifier(b)
+// CHECK-NEXT: Drop b
+// CHECK-NEXT: Return
+// CHECK-NEXT: Identifier(t)
+
+// CHECK-LABEL: Function: refilled_on_one_path
+// CHECK:      Let mut [[REFILLED:__vx_moved_[0-9]+]] (typed) =
+// CHECK-NEXT: Identifier(false)
+// CHECK-NEXT: Let s =
+// CHECK-NEXT: Call(take)
+// CHECK-NEXT: Identifier(a)
+// CHECK-NEXT: Assign
+// CHECK-NEXT: Identifier([[REFILLED]])
+// CHECK-NEXT: Identifier(true)
+// CHECK-NEXT: ExprStmt
+// CHECK-NEXT: then_block: [Assign(AssignStmt { lhs: Identifier(IdentifierExpr { name: "a"{{.*}}Assign(AssignStmt { lhs: Identifier(IdentifierExpr { name: "[[REFILLED]]"{{.*}}name: "false"
+// CHECK-NEXT: Drop a if [[REFILLED]] is false
+// CHECK-NEXT: Return
+
+// The flag is set where `pass` takes `t` and cleared after `t` gets the result.
+// CHECK-LABEL: Function: moved_and_refilled_on_one_path
+// CHECK:      Let mut [[PASSED:__vx_moved_[0-9]+]] (typed) =
+// CHECK:      then_block: [Assign(AssignStmt { lhs: Identifier(IdentifierExpr { name: "t"{{.*}}name: "[[PASSED]]"{{.*}}name: "true"{{.*}}name: "[[PASSED]]"{{.*}}name: "false"
+// CHECK-NEXT: Drop t if [[PASSED]] is false, after the value
+// CHECK-NEXT: Return
+
+// CHECK-LABEL: Function: leaving_a_loop
+// CHECK: ForLoop{{.*}}Drop(DropStmt { name: "a", flag: None, after_value: false{{.*}}Continue{{.*}}Drop(DropStmt { name: "a", flag: None, after_value: false{{.*}}Break
+
+// CHECK-LABEL: Function: arm_value
+// CHECK: then_block: [LetDecl{{.*}}Drop(DropStmt { name: "a", flag: None, after_value: true{{.*}}ExprStmt{{.*}}name: "a"{{.*}}else_block

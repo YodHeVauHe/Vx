@@ -5809,6 +5809,18 @@ pub fn verify_hir_stream(worker: &LocalWorkerState) {
     }
 }
 
+/// Whether everything after a region's loop, at `idx`, may run per-thread after each thread's
+/// stripe: nothing, or drops of scratch declared before the loop, which each thread has a copy
+/// of.
+fn only_scratch_drops_after(stmts: &[Statement], idx: usize) -> bool {
+    stmts[idx + 1..].iter().all(|s| match s {
+        Statement::Drop(d) => stmts[..idx]
+            .iter()
+            .any(|p| matches!(p, Statement::LetDecl(l) if l.name == d.name)),
+        _ => false,
+    })
+}
+
 /// Is the outermost `for` of this spawn region safe to grid-stride — run its iterations on
 /// concurrent device threads instead of one (#251)?
 ///
@@ -5836,18 +5848,6 @@ pub fn verify_hir_stream(worker: &LocalWorkerState) {
 /// The declared/used-captured distinction is tracked in program order, so the walker is immune to
 /// shadowing tricks without needing scopes: a declaration is only accepted while its name has
 /// never been read as captured.
-/// Whether everything after a region's loop, at `idx`, may run per-thread after each thread's
-/// stripe: nothing, or drops of scratch declared before the loop, which each thread has a copy
-/// of.
-fn only_scratch_drops_after(stmts: &[Statement], idx: usize) -> bool {
-    stmts[idx + 1..].iter().all(|s| match s {
-        Statement::Drop(d) => stmts[..idx]
-            .iter()
-            .any(|p| matches!(p, Statement::LetDecl(l) if l.name == d.name)),
-        _ => false,
-    })
-}
-
 fn parallel_outer_for(stmts: &[Statement]) -> Option<(usize, u64)> {
     use crate::syntax::stmt::Statement as S;
 

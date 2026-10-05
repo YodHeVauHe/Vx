@@ -53,6 +53,8 @@ struct Owner {
     /// The scope it was declared in: a move from the same scope is certain.
     scope: usize,
     moved: Moved,
+    /// The statement of its block that last moved it for certain.
+    moved_at: Option<usize>,
     /// The `bool` local that says it was moved, once a move inside a nested block needed one.
     flag: Option<String>,
 }
@@ -62,8 +64,9 @@ struct Owner {
 struct Edits {
     before: BTreeMap<usize, Vec<Statement>>,
     after: BTreeMap<usize, Vec<Statement>>,
-    /// `t = e` whose old value is dropped: the drop, and the flag to clear after the store.
-    assign: HashMap<usize, (Statement, Option<String>)>,
+    /// `t = e`: the drop of the old value, if it was not moved, and the flag to clear once
+    /// everything else at the statement has run.
+    assign: HashMap<usize, (Option<Statement>, Option<String>)>,
 }
 
 enum FrameKind {
@@ -207,6 +210,7 @@ impl<'a> TypeChecker<'a> {
                 to_block_end: false,
                 scope,
                 moved: Moved::No,
+                moved_at: None,
                 flag: None,
             })
             .collect();
@@ -240,6 +244,7 @@ impl<'a> TypeChecker<'a> {
                 to_block_end: false,
                 scope,
                 moved: Moved::No,
+                moved_at: None,
                 flag: None,
             });
         }
@@ -258,25 +263,32 @@ impl<'a> TypeChecker<'a> {
             match f {
                 FrameKind::Function { .. } => return,
                 FrameKind::Loop => {}
-                FrameKind::Block { owners, .. } => {
+                FrameKind::Block { owners, stmt, .. } => {
                     if let Some(o) = owners.iter_mut().rev().find(|o| o.name == name) {
+                        // A value given in a nested block only reaches the paths through it:
+                        // a move before it stays possible.
                         o.moved = if again {
-                            Moved::No
+                            if o.scope == here || o.moved == Moved::No {
+                                Moved::No
+                            } else {
+                                Moved::Maybe
+                            }
                         } else if o.scope == here {
+                            o.moved_at = Some(*stmt);
                             Moved::Yes
                         } else {
                             Moved::Maybe
                         };
-                        found = Some((k, o.moved, o.flag.clone(), o.decl));
+                        found = Some((k, o.moved, o.flag.clone(), o.decl, o.moved_at));
                         break;
                     }
                 }
             }
         }
-        let Some((k, Moved::Maybe, flag, decl)) = found else {
+        let Some((k, Moved::Maybe, flag, decl, moved_at)) = found else {
             return;
         };
-        if !rewriting {
+        if !rewriting || (again && flag.is_some()) {
             return;
         }
         // The first move inside a nested block gives the owner a flag, declared beside it.
@@ -297,6 +309,20 @@ impl<'a> TypeChecker<'a> {
                 f
             }
         };
+        // Given a value again in a nested block after a certain move: the flag is set at that
+        // move, and the assignment clears it.
+        if again {
+            if let (Some(i), FrameKind::Block { edits, .. }) =
+                (moved_at, &mut self.borrow.drops.frames[k])
+            {
+                edits
+                    .after
+                    .entry(i)
+                    .or_default()
+                    .push(assign_stmt(&flag, ident("true")));
+            }
+            return;
+        }
         if let Some(FrameKind::Block { stmt, edits, .. }) =
             self.borrow.drops.frames.get_mut(top - 1)
         {
@@ -369,8 +395,31 @@ impl<'a> TypeChecker<'a> {
         let Some(moved) = before else {
             return;
         };
-        // `t = f(t)` moved the old value into the call.
-        if moved == Moved::Yes || self.borrow.drops.moved_now.contains(name) {
+        // `t = t + b` moved the old value into the operator, which queued its drop after the
+        // statement, where it would free the new value. The drop moves before the store.
+        let operand_drop = !self.speculating
+            && self.drops_rewriting()
+            && self.borrow.drops.moved_now.contains(name)
+            && match self.borrow.drops.frames.last_mut() {
+                Some(FrameKind::Block { stmt, edits, .. }) => {
+                    let queued = edits.after.entry(*stmt).or_default();
+                    let n = queued.len();
+                    queued.retain(|s| !matches!(s, Statement::Drop(d) if d.name.as_ref() == name));
+                    queued.len() != n
+                }
+                _ => false,
+            };
+        // `t = f(t)` moved the old value into the call; a flag still has to be cleared.
+        if !operand_drop && (moved == Moved::Yes || self.borrow.drops.moved_now.contains(name)) {
+            if self.speculating || !self.drops_rewriting() {
+                return;
+            }
+            let flag = self.drops_owner(name).and_then(|o| o.flag.clone());
+            if let (Some(f), Some(FrameKind::Block { stmt, edits, .. })) =
+                (flag, self.borrow.drops.frames.last_mut())
+            {
+                edits.assign.insert(*stmt, (None, Some(f)));
+            }
             return;
         }
         // `c = a @ b` with neither operand `c`: the product is written into `c`'s buffer, the
@@ -413,8 +462,10 @@ impl<'a> TypeChecker<'a> {
             return;
         };
         let flag = owner.flag.clone();
-        let old_flag = flag.as_deref().filter(|_| moved == Moved::Maybe);
-        let drop_old = after_value(drop_stmt(name, old_flag));
+        let old_flag = flag
+            .as_deref()
+            .filter(|_| moved == Moved::Maybe && !operand_drop);
+        let drop_old = Some(after_value(drop_stmt(name, old_flag)));
         if let Some(FrameKind::Block { stmt, edits, .. }) = self.borrow.drops.frames.last_mut() {
             edits.assign.insert(*stmt, (drop_old, flag));
         }
@@ -604,16 +655,15 @@ impl<'a> TypeChecker<'a> {
                     out.push(body[i].clone());
                 }
                 _ => {
-                    if let Some((drop_old, flag)) = edits.assign.remove(&i) {
-                        out.push(drop_old);
-                        out.push(body[i].clone());
-                        if let Some(f) = flag {
-                            out.push(assign_stmt(&f, ident("false")));
-                        }
-                    } else {
-                        out.push(body[i].clone());
+                    let assign = edits.assign.remove(&i);
+                    if let Some((Some(drop_old), _)) = &assign {
+                        out.push(drop_old.clone());
                     }
+                    out.push(body[i].clone());
                     out.extend(after);
+                    if let Some((_, Some(f))) = assign {
+                        out.push(assign_stmt(&f, ident("false")));
+                    }
                 }
             }
             body.splice(i..=i, out);
