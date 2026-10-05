@@ -70,6 +70,7 @@ the proposal, and what was considered and rejected. Like the plans, they describ
 | Document | Covers |
 | --- | --- |
 | [`discussions/size_type.md`](discussions/size_type.md) | A size type whose overflow is a bug rather than a value |
+| [`discussions/view_type.md`](discussions/view_type.md) | A view of a tensor is a `&Tensor` reference: spelling, strides, placement and borrow rules |
 
 ## A note on accuracy
 
