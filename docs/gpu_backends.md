@@ -55,9 +55,10 @@ record:
 | CPU (x86-64, arm64) | native, through LLVM | working, tested in CI |
 | NVIDIA | `gpu` dialect → NVVM → PTX; cuBLAS for matmul | working for placed kernels; completion tracked in #251 |
 | Apple GPU / ANE | library routing (MPS, CoreML) | working for the routed patterns |
-| Intel XPU | SPIR-V, Level Zero runtime | offered by a contributor; planning in #1137 |
-| AMD | ROCDL (when it has an owner) | machine file exists (`fleet/mi300x.vx`); no backend, no owner |
-| TPU | — | out of scope: the vendor compiler stack is closed, so a backend cannot be built outside Google |
+| Intel XPU | kernel SPIR-V, Level Zero runtime | offered by a contributor; planning in #1137 |
+| Vulkan | shader SPIR-V | not planned as a first target: the shader model fights a language with raw pointers, and there is no vendor BLAS — see below |
+| AMD | ROCDL | machine file exists (`fleet/mi300x.vx`); no backend yet. Likely the cheapest backend after the shared work — ROCDL sits close to the NVVM path, hipBLASLt parallels cuBLAS — and a maintainer priority when hardware access appears |
+| TPU | — | not planned: there is no native route, since the vendor compiler stack is closed. Emitting StableHLO for a PJRT plugin is a public route, but a different kind of backend than the three pieces above |
 
 SYCL as a compile target is declined: Vx's checker already does the job
 SYCL's C++ layer does. What the SYCL stack offers Vx is its runtime (Level
@@ -82,6 +83,11 @@ the difference is bigger than it sounds:
 For a first community backend, Level Zero is the smaller step. A Vulkan
 runtime can come later under the same device-image machinery.
 
+One more choice to make before code: MLIR 22 has two routes to kernel
+SPIR-V — `convert-gpu-to-spirv` and the XeVM target — and they differ in
+flavor and maturity. Agree on one in the planning issue first, or the first
+PR becomes that argument.
+
 ## Support tiers
 
 CI runs on Ubuntu with no GPU, so "merged" has to mean something a machine
@@ -89,14 +95,21 @@ without the hardware can check. The tiers, modeled on Rust's target tiers:
 
 - **Tier 1 — CPU paths.** CI runs the tests; a regression blocks the merge.
 - **Tier 2 — NVIDIA.** Maintainer-owned. CI proves it builds; correctness is
-  shown by parity runs on hardware before any release or public claim.
+  shown by parity runs on hardware before any release or public claim. A
+  scheduled, non-blocking run on rented hardware would catch regressions
+  between releases; until one exists, the pre-release run is the only
+  hardware signal.
 - **Tier 3 — community backends.** Must build in CI with no vendor SDK
   installed: the device-image half compiles and its output is checked with
   FileCheck, and the vendor-free runtime pieces have unit tests in
   `tests/runtime/`. Correctness is shown by parity runs the hardware owner
   records in each PR, with the test marked `REQUIRES: gpu`. A named owner is
   a requirement for merging; a backend that loses its owner is marked
-  unmaintained here, not reverted. A Tier 3 regression never blocks `main`.
+  unmaintained here, not reverted. A Tier 3 regression never blocks `main`,
+  and that includes its CI build job: the job is a non-required check, and
+  when a change on `main` breaks it, the owner has until the next release
+  (or thirty days, whichever comes first) to fix it before the job is
+  disabled and the row here marked unmaintained.
   To compile without the SDK, vendor the open headers (Khronos publishes
   both the Vulkan and the Level Zero headers) or load the driver with
   `dlopen`, so the file builds everywhere and only running needs the device.
@@ -117,13 +130,16 @@ their value whichever backend lands first.
 1. **The dispatch payload cannot carry a binary image.** The payload is a
    sequence of NUL-terminated `key=value` entries, which works because PTX is
    text; `deviceImageOf()` rejects images containing a NUL byte. SPIR-V is
-   binary, so the image needs either an encoding (base64) or a
-   length-prefixed section — that choice is the issue's to make. Alongside
-   the image, the payload should name what it carries: a version key
-   (`abi=1`), the image format (`format=ptx` or `format=spirv`), and the
-   kernel entry point, so a dispatch library that sees something it does not
-   know refuses instead of guessing. The `vx_plugin_*` interface is not
-   frozen yet, and the version key is what makes changing it safe.
+   binary, and since nothing here is frozen yet, the fix is to change the
+   format — a length-prefixed image section — rather than base64-encode
+   binary into a text format. Alongside the image, the payload should name
+   what it carries: a version key (`abi=1`), the image format (`format=ptx`
+   or `format=spirv`), and the kernel entry point, so a dispatch library
+   that sees something it does not know refuses instead of guessing. The
+   payload also crosses the remote-worker wire verbatim
+   (`runtime/vx_wire.h` already frames it by length), so the version key
+   inside the payload is what lets an older worker refuse rather than
+   misread.
 1. **Address spaces are mapped for NVVM only.** `AddressSpace` in
    `src/arch.rs` knows the NVPTX numbering, and several places in
    `VxLowering.cpp` compare the shared-memory address space to the integer 3
@@ -133,22 +149,36 @@ their value whichever backend lands first.
    SPIR-V).
 1. **Scalar element types escape the `dtypes:` check.** E6026 covers tensors
    that are placed or transferred. An f64 *scalar* inside a `spawn` body
-   passes the checker today and would only fail on the device. The body of a
-   `spawn` has to be checked against the target topology's `dtypes:` list.
+   passes the checker today and would only fail on the device, and the same
+   goes for vectors and the small float formats. The body of a `spawn` has
+   to be checked against the target topology's `dtypes:` list, for every
+   element type it uses.
 1. **One dispatch library per build.** `build.rs` builds exactly one runtime
    dispatch library and programs load that one (`VX_DISPATCH_LIB` overrides
    it by hand). Running two device kinds from one program needs a routing
    registry: each `vx_plugin_*` call carries or implies a topology id, and
-   the registry maps that id to the backend that owns the device.
+   the registry maps that id to the backend that owns the device. This is
+   the item that keeps Vx a heterogeneous language rather than a portable
+   single-target compiler, and the pattern exists already: the remote path
+   routes a dispatch by topology through a manifest
+   (`runtime/vx_remote_routing.h`); local routing is the same idea without
+   the socket.
 1. **A conformance test set.** A vendor-neutral set of placed-kernel programs
    whose results are compared against the CPU path.
    `tests/backend/pass/placed_kernel_four_operands.vx` is the reference
-   shape.
+   shape. The set must include a matmul routed through the backend's vendor
+   library (oneMKL for Intel), compared against the host product — that
+   route is how the dominant operation runs, so it cannot be the one path
+   without a conformance case. Once dispatch routing (the item above) lands,
+   the set also gains a program that places kernels on two device kinds in
+   one run.
 
 ## The bar for being listed as working
 
 The conformance set passes on real hardware, with the runs recorded in the
-PR. The bar is the CPU path's result: same program, same numbers.
+PR. The bar is the CPU path's result: same program, same numbers. Once
+dispatch routing exists, the two-device program in the set is part of this
+bar — a backend that only works alone keeps Vx from being what it is for.
 
 ## How to start
 
