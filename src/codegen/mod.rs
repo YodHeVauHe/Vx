@@ -65,6 +65,10 @@ const ENZYME_KNOWN_LIBM: &[(&str, &str)] = &[
     ("libm_log2f", "log2f"),
     ("libm_log10f", "log10f"),
     ("libm_log1pf", "log1pf"),
+    ("libm_log", "log"),
+    ("libm_log2", "log2"),
+    ("libm_log10", "log10"),
+    ("libm_log1p", "log1p"),
     ("libm_hypotf", "hypotf"),
     ("libm_powf", "powf"),
 ];
