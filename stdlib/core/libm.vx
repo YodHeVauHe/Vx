@@ -6982,7 +6982,7 @@ fn libm_log1p_value(x : f64, always_accurate : bool) -> f64 {
     libm_f64_from_bits(4224376450473525248u64) // 0x1.0p-85
   };
   // x_dd scaled to [1, 2): the exponent of hi, taken off lo as well.
-  let s_u = ((xhi_u & 9218868437227405312u64) as i64) - 4607182418800017408; // 1023 << 52 // 0x7ff0000000000000
+  let s_u = ((xhi_u & 9218868437227405312u64) as i64) - 4607182418800017408; // 0x7ff0000000000000, 1023 << 52
   let m_hi = 4607182418800017408u64 | xhi_frac; // 0x3ff0000000000000
   let lo_abs = libm_f64_from_bits(libm_f64_to_bits(x_dd.lo) & 9223372036854775807u64); // 0x7fffffffffffffff
   let m_lo = if lo_abs > x_dd.hi * libm_f64_from_bits(4035225266123964416u64) { // 0x1.0p-127
