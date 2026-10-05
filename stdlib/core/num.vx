@@ -1612,8 +1612,8 @@ macro_rules stamp_float_exps {
 
 stamp_float_exps!(f64 , 1.0);
 
-/// Stamps `powf` through the platform's `math` operation, for the widths without a `core::libm`
-/// version yet: `f64`, `f16` and `bf16`. `f32` uses `core::libm`'s.
+/// Stamps `powf` through the platform's `math` operation, for `f64`, which has no `core::libm`
+/// version yet.
 macro_rules stamp_float_pow {
   ($t : ident) => {
     impl $t {
@@ -1629,8 +1629,6 @@ macro_rules stamp_float_pow {
 }
 
 stamp_float_pow!(f64);
-stamp_float_pow!(f16);
-stamp_float_pow!(bf16);
 
 /// Stamps `asin`, `acos`, `atan`, `atan2` and `hypot` through the platform's `math` operations, for `f64`, which has no `core::libm`
 /// version yet. The other widths use `core::libm`'s.
@@ -2007,6 +2005,11 @@ impl f16 {
   fn hypot(self : f16, other : f16) -> f16 {
     return libm_hypotf16(self, other);
   }
+
+  /// This raised to `n`, correctly rounded.
+  fn powf(self : f16, n : f16) -> f16 {
+    return libm_powf16(self, n);
+  }
 }
 
 impl bf16 {
@@ -2100,6 +2103,11 @@ impl bf16 {
   /// overflow or underflow in between; correctly rounded (in double, rounded once).
   fn hypot(self : bf16, other : bf16) -> bf16 {
     return libm_hypot_bf16(self, other);
+  }
+
+  /// This raised to `n`, correctly rounded.
+  fn powf(self : bf16, n : bf16) -> bf16 {
+    return libm_pow_bf16(self, n);
   }
 }
 

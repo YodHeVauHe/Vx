@@ -2682,8 +2682,8 @@ fn libm_f32_round_odd(d : f64) -> f32 {
     return f;
   }
   let mut b = libm_f32_to_bits(f);
-  // Rounded away from zero: step back toward it.
-  if (f as f64) * (f as f64) > d * d {
+  // Rounded away from zero (to infinity, when d is beyond the f32 range): step back toward it.
+  if (d > 0.0) == ((f as f64) > d) {
     b = b - 1u32;
   }
   return libm_f32_from_bits(b | 1u32);
@@ -3379,11 +3379,16 @@ fn libm_powf_double_double(idx_x : i64, dx : f64, y6 : f64, lo6_hi : f64, exp2_h
   return libm_dd_exact_add(rr.hi, rr.lo);
 }
 
-/// `x^y`, correctly rounded: `powf` from `powf.h`. `x^y = 2^(y log2 x)`: `log2 x` from the
-/// `LOG2_R` tables and a polynomial, `2^(.)` from `EXP2_MID1` and a polynomial, both in double;
-/// a result too near a rounding boundary is redone in double-double. Special cases: `y` of 0,
-/// 1/2, 1, 2, small whole `y` computed exactly, infinities, NaNs, zeros and negative `x`.
-fn libm_powf(x0 : f32, y0 : f32) -> f32 {
+/// `x^y` as a double: `powf` from `powf.h`. `x^y = 2^(y log2 x)`: `log2 x` from the `LOG2_R`
+/// tables and a polynomial, `2^(.)` from `EXP2_MID1` and a polynomial, both in double; a result
+/// too near a rounding boundary is redone in double-double and moved off a halfway point by
+/// `libm_dd_nudge` with `mask`. Special cases: `y` of 0, 1/2, 1, 2, small whole `y` computed
+/// exactly, infinities, NaNs, zeros and negative `x`.
+///
+/// With `narrow` false the result rounds to the correct f32, as `powf` does. With `narrow` true,
+/// for f16 and bf16 inputs, every result takes the double-double pass, and `exp2f` and `exp10f`,
+/// which would round twice, are not used for `x` of 2 and 10.
+fn libm_pow_value(x0 : f32, y0 : f32, mask : u64, narrow : bool) -> f64 {
   let mut x = x0;
   let mut y = y0;
   let mut x_u = libm_f32_to_bits(x);
@@ -3392,41 +3397,42 @@ fn libm_powf(x0 : f32, y0 : f32) -> f32 {
   let y_abs = y_u & 2147483647u32; // 0x7fffffff
   if (y_abs & 524287u32) == 0u32 || y_abs > 1326907392u32 { // 0x0007ffff, 0x4f170000
     if libm_f32_is_signaling_nan(x_u) || libm_f32_is_signaling_nan(y_u) {
-      return libm_f32_from_bits(2143289344u32); // 0x7fc00000
+      return libm_f64_from_bits(9221120237041090560u64); // 0x7ff8000000000000
     }
     if y_abs == 0u32 {
       return 1.0;
     }
     if y_abs == 2139095040u32 { // 0x7f800000
       if x_abs > 2139095040u32 { // 0x7f800000
-        return x;
+        return x as f64;
       }
       if x_abs == 1065353216u32 { // 0x3f800000
         return 1.0;
       }
       if x_abs == 0u32 && y_u == 4286578688u32 { // 0xff800000
-        return libm_f32_from_bits(2139095040u32); // 0x7f800000
+        return libm_f64_from_bits(9218868437227405312u64); // 0x7ff0000000000000
       }
       if (x_abs < 1065353216u32) == (y_u == 4286578688u32) { // 0x3f800000, 0xff800000
-        return libm_f32_from_bits(2139095040u32); // 0x7f800000
+        return libm_f64_from_bits(9218868437227405312u64); // 0x7ff0000000000000
       }
       return 0.0;
     }
     if y_u == 1056964608u32 { // 0x3f000000
       if x_abs == 0u32 || x_u == 4286578688u32 { // 0xff800000
-        return x * x;
+        return (x * x) as f64;
       }
       let r = libm_sqrt_f32(x);
       if libm_f32_to_bits(r) != 2147483648u32 { // 0x80000000
-        return r;
+        return r as f64;
       }
       return 0.0;
     }
     if y_u == 1065353216u32 { // 0x3f800000
-      return x;
+      return x as f64;
     }
+    // Exact in double.
     if y_u == 1073741824u32 { // 0x40000000
-      return x * x;
+      return (x as f64) * (x as f64);
     }
     // A small whole y whose power fits in a double: computed exactly, rounded once.
     if libm_f32_bits_is_integer(y_u) && y_u > 1073741824u32 && y_u <= 1103101952u32 { // 0x40000000, 0x41c00000
@@ -3450,7 +3456,7 @@ fn libm_powf(x0 : f32, y0 : f32) -> f32 {
         for i in 1..iter {
           result = result * x_d;
         }
-        return result as f32;
+        return result;
       }
     }
     if y_abs > 1326907392u32 { // 0x4f170000
@@ -3459,7 +3465,7 @@ fn libm_powf(x0 : f32, y0 : f32) -> f32 {
         if x_u == 1065353216u32 { // 0x3f800000
           return 1.0;
         }
-        return y;
+        return y as f64;
       }
       // Huge y: only its sign and evenness matter, so 2^32 with its sign does.
       y = libm_f32_from_bits((y_u & 2147483648u32) + 1333788672u32); // 0x80000000, 0x4f800000
@@ -3469,25 +3475,25 @@ fn libm_powf(x0 : f32, y0 : f32) -> f32 {
   let mut sign : u64 = 0u64;
   if (x_u & 2149580799u32) == 0u32 || x_u >= 2139095040u32 || x_u < 8388608u32 { // 0x801fffff, 0x7f800000, 0x00800000
     if libm_f32_is_signaling_nan(x_u) {
-      return libm_f32_from_bits(2143289344u32); // 0x7fc00000
+      return libm_f64_from_bits(9221120237041090560u64); // 0x7ff8000000000000
     }
     if x_u == 1065353216u32 { // 0x3f800000
       return 1.0;
     }
-    if x_u == 1073741824u32 { // 0x40000000
-      return libm_exp2f(y);
+    if x_u == 1073741824u32 && !narrow { // 0x40000000
+      return libm_exp2f(y) as f64;
     }
-    if x_u == 1092616192u32 { // 0x41200000
-      return libm_exp10f(y);
+    if x_u == 1092616192u32 && !narrow { // 0x41200000
+      return libm_exp10f(y) as f64;
     }
     let x_is_neg = x_u >= 2147483648u32; // 0x80000000
     if x_abs == 0u32 {
       let out_is_neg = x_is_neg && libm_f32_bits_is_odd_integer(y_u);
       if y_u > 2147483648u32 { // 0x80000000
         if out_is_neg {
-          return libm_f32_from_bits(4286578688u32); // 0xff800000
+          return libm_f64_from_bits(18442240474082181120u64); // 0xfff0000000000000
         }
-        return libm_f32_from_bits(2139095040u32); // 0x7f800000
+        return libm_f64_from_bits(9218868437227405312u64); // 0x7ff0000000000000
       }
       if out_is_neg {
         return -0.0;
@@ -3503,12 +3509,12 @@ fn libm_powf(x0 : f32, y0 : f32) -> f32 {
         return 0.0;
       }
       if out_is_neg {
-        return libm_f32_from_bits(4286578688u32); // 0xff800000
+        return libm_f64_from_bits(18442240474082181120u64); // 0xfff0000000000000
       }
-      return libm_f32_from_bits(2139095040u32); // 0x7f800000
+      return libm_f64_from_bits(9218868437227405312u64); // 0x7ff0000000000000
     }
     if x_abs > 2139095040u32 { // 0x7f800000
-      return x;
+      return x as f64;
     }
     // Subnormal: scale into the normal range.
     if x_abs < 8388608u32 { // 0x00800000
@@ -3518,7 +3524,7 @@ fn libm_powf(x0 : f32, y0 : f32) -> f32 {
     if x_is_neg {
       let y_bits = libm_f32_to_bits(y);
       if !libm_f32_bits_is_integer(y_bits) {
-        return libm_f32_from_bits(2143289344u32); // 0x7fc00000
+        return libm_f64_from_bits(9221120237041090560u64); // 0x7ff8000000000000
       }
       x = -x;
       if libm_f32_bits_is_odd_integer(y_bits) {
@@ -3557,7 +3563,12 @@ fn libm_powf(x0 : f32, y0 : f32) -> f32 {
   let idx_y = hm_i & 63;
   let exp_hi_i = (hm_i >> 6) << 52;
   let exp_mid_i = libm_f64_to_bits(LIBM_EXP2_MID1[3 * idx_y + 2]) as i64;
-  let exp2_hi_mid = libm_f64_from_bits(((exp_hi_i + exp_mid_i) as u64) + sign);
+  // In narrow mode the sign goes on the result instead, so that the low part below has it too.
+  let mut exp_sign = sign;
+  if narrow {
+    exp_sign = 0u64;
+  }
+  let exp2_hi_mid = libm_f64_from_bits(((exp_hi_i + exp_mid_i) as u64) + exp_sign);
   // 2^(lo6 / 64)
   let lo6_sqr = lo6 * lo6;
   let d0 = libm_multiply_add(lo6, libm_f64_from_bits(4577396936549218799u64), 1.0); // 0x1.62e42fefa39efp-7
@@ -3569,17 +3580,53 @@ fn libm_powf(x0 : f32, y0 : f32) -> f32 {
   let r_u = libm_f64_to_bits(r);
   let r_upper = libm_f64_from_bits(r_u + 64u64) as f32;
   let r_lower = libm_f64_from_bits(r_u - 64u64) as f32;
-  if r_upper == r_lower {
-    return r_upper;
+  if r_upper == r_lower && !narrow {
+    return r;
   }
   let mut mid_lo : f64 = 0.0;
   if idx_y != 0 {
     mid_lo = libm_f64_from_bits((exp_hi_i + (libm_f64_to_bits(LIBM_EXP2_MID1[3 * idx_y + 1]) as i64)) as u64);
   }
-  let r_dd = libm_powf_double_double(idx_x, dx, y6, lo6_hi, LibmDoubleDouble {
+  let mut r_dd = libm_powf_double_double(idx_x, dx, y6, lo6_hi, LibmDoubleDouble {
     hi: exp2_hi_mid, lo: mid_lo
   });
-  return libm_dd_nudge(r_dd, 268435455u64) as f32;
+  // A low part this small is rounding noise on an exact result, such as (6^4 * 2^-24)^1.25 = 6^5 *
+  // 2^-30, which can sit exactly on a halfway point of f16 and must round to even.
+  let abs_hi = libm_f64_from_bits(libm_f64_to_bits(r_dd.hi) & 9223372036854775807u64); // 0x7fffffffffffffff
+  let abs_lo = libm_f64_from_bits(libm_f64_to_bits(r_dd.lo) & 9223372036854775807u64); // 0x7fffffffffffffff
+  if narrow && abs_lo < abs_hi * libm_f64_from_bits(4201858452336672768u64) { // 0x1p-90
+    r_dd = LibmDoubleDouble {
+      hi: r_dd.hi, lo: 0.0
+    };
+  }
+  let v = libm_dd_nudge(r_dd, mask);
+  if narrow && sign != 0u64 {
+    return -v;
+  }
+  return v;
+}
+
+/// `x^y`, correctly rounded: `powf` from `powf.h`.
+fn libm_powf(x : f32, y : f32) -> f32 {
+  return libm_pow_value(x, y, 268435455u64, false) as f32;
+}
+
+/// `x^y` for f16, correctly rounded: `libm_pow_value` on the inputs widened to f32, always
+/// through the double-double pass, rounded once.
+fn libm_powf16(x : f16, y : f16) -> f16 {
+  // Widening to f32 would quiet a signaling NaN, and pow(1, NaN) is 1 for a quiet one.
+  let x_a = libm_f16_to_bits(x) & 32767u16; // 0x7fff
+  let y_a = libm_f16_to_bits(y) & 32767u16; // 0x7fff
+  if (x_a > 31744u16 && (x_a & 512u16) == 0u16) || (y_a > 31744u16 && (y_a & 512u16) == 0u16) { // 0x7c00, 0x200
+    return libm_f16_from_bits(32256u16); // 0x7e00
+  }
+  return libm_pow_value(x as f32, y as f32, 2199023255551u64, true) as f16;
+}
+
+/// `x^y` for bf16, correctly rounded: as for f16, rounded to f32 with round-to-odd and then to
+/// bf16.
+fn libm_pow_bf16(x : bf16, y : bf16) -> bf16 {
+  return libm_bf16_from_f32(libm_f32_round_odd(libm_pow_value(libm_f32_from_bf16(x), libm_f32_from_bf16(y), 17592186044415u64, true)));
 }
 
 /// The correctly rounded square root of an f32.
