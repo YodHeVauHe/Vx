@@ -1517,47 +1517,6 @@ stamp_float!(f64 , 1.0 , 0.0 , 180.0);
 stamp_float!(f16 , 1.0 , 0.0 , 180.0);
 stamp_float!(bf16 , 1.0 , 0.0 , 180.0);
 
-/// Stamps `log2`, `log10` and `ln_1p` through the platform's `math` operations, for the widths
-/// without a `core::libm` version yet: `f64`. The other widths use `core::libm`'s.
-macro_rules stamp_float_logs {
-  ($t : ident , $one : expr) => {
-    impl $t {
-      /// The logarithm to base two.
-      fn log2(self : $t) -> $t {
-        return mlir!( inputs : (%a = self : $t), returns : $t, dialects : ["math"]) {
-          %r = math.log2 %a : $t
-          macro.yield %r : $t
-        };
-      }
-
-      /// The logarithm to base ten.
-      fn log10(self : $t) -> $t {
-        return mlir!( inputs : (%a = self : $t), returns : $t, dialects : ["math"]) {
-          %r = math.log10 %a : $t
-          macro.yield %r : $t
-        };
-      }
-
-      /// `ln` of one plus this, kept accurate for a small argument.
-      ///
-      /// Not `math.log1p`, which lowers to `ln(1 + x)` and loses the small argument in the
-      /// addition. With `u = 1 + x`, `ln(u) * x / (u - 1)` corrects for that rounding.
-      fn ln_1p(self : $t) -> $t {
-        let u = $one + self;
-        if u == $one {
-          return self;
-        }
-        if u.is_infinite() {
-          return u;
-        }
-        return u.ln() * self / (u - $one);
-      }
-    }
-  };
-}
-
-stamp_float_logs!(f64 , 1.0);
-
 /// Stamps `exp`, `exp2` and `exp_m1` through the platform's `math` operations, for `f64`, which
 /// has no `core::libm` version yet. The other widths use `core::libm`'s.
 macro_rules stamp_float_exps {
@@ -1794,6 +1753,22 @@ impl f64 {
   /// The natural logarithm, correctly rounded (LLVM libc's `log`).
   fn ln(self : f64) -> f64 {
     return libm_log(self);
+  }
+
+  /// The logarithm to base two, correctly rounded (LLVM libc's `log2`).
+  fn log2(self : f64) -> f64 {
+    return libm_log2(self);
+  }
+
+  /// The logarithm to base ten, correctly rounded (LLVM libc's `log10`).
+  fn log10(self : f64) -> f64 {
+    return libm_log10(self);
+  }
+
+  /// `ln` of one plus this, correctly rounded and accurate for a small argument (LLVM libc's
+  /// `log1p`).
+  fn ln_1p(self : f64) -> f64 {
+    return libm_log1p(self);
   }
 }
 
